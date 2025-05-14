@@ -1,45 +1,41 @@
-import { createContext, useContext, useState } from 'react';
+// AuthContext.js
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import md5 from 'blueimp-md5';
+import { env } from '../services/env';
 
-export const AuthContext = createContext();
+const AuthContext = createContext();
 
-export function useAuth() {
-	return useContext(AuthContext);
-}
-
-export function AuthProvider({ children }) {
-	const [currentUser, setCurrentUser] = useState(null);
-	const [company, setCompany] = useState(null);
+export const AuthProvider = ({ children }) => {
 	const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-	const login = async (username, password) => {
-		if (username === 'admin' && password === 'password') {
-			const user = { id: 1, username: 'admin', name: 'Amministratore' };
-			const company = { id: 1, name: 'Impresa Costruzioni SRL' };
-			setCurrentUser(user);
-			setCompany(company);
+	// For development: auto-authenticate and set mock site if using mock
+	useEffect(() => {
+		if (env.useMock) {
 			setIsAuthenticated(true);
-			return { success: true };
-		} else {
-			return { success: false, error: 'Credenziali non valide' };
 		}
+	}, []);
+
+	const login = (username, password) => {
+		const hash = md5(password);
+		if (username === env.adminUser && hash === env.adminHash) {
+			setIsAuthenticated(true);
+			return true;
+		}
+		return false;
 	};
 
 	const logout = () => {
-		setCurrentUser(null);
-		setCompany(null);
 		setIsAuthenticated(false);
 	};
 
-	const value = {
-		currentUser,
-		company,
-		isAuthenticated,
-		login,
-		logout,
-	};
+	return (
+		<AuthContext.Provider value={{ isAuthenticated, login, logout }}>
+			{children}
+		</AuthContext.Provider>
+	);
+};
 
-	return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-}
+export const useAuth = () => useContext(AuthContext);
 
 /* import { createContext, useContext, useState } from 'react';
 

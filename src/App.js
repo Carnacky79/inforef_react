@@ -5,7 +5,7 @@ import {
 	Route,
 	Navigate,
 } from 'react-router-dom';
-import { AuthProvider, useAuth, AuthContext } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { DataProvider } from './context/DataContext';
 
 import LoginPage from './pages/LoginPage';
@@ -13,6 +13,7 @@ import DashboardPage from './pages/DashboardPage';
 import MapManagementPage from './pages/MapManagementPage';
 import TagAssociationPage from './pages/TagAssociationPage';
 import Navbar from './components/Navbar';
+import ConfigurationPage from './pages/ConfigurationPage';
 
 const App = () => {
 	return (
@@ -28,6 +29,14 @@ const App = () => {
 								element={
 									<ProtectedRoute>
 										<DashboardPage />
+									</ProtectedRoute>
+								}
+							/>
+							<Route
+								path='/configuration'
+								element={
+									<ProtectedRoute>
+										<ConfigurationPage />
 									</ProtectedRoute>
 								}
 							/>
@@ -57,7 +66,7 @@ const App = () => {
 };
 
 const ProtectedRoute = ({ children }) => {
-	const { isAuthenticated } = React.useContext(AuthContext);
+	const { isAuthenticated } = useAuth();
 	return isAuthenticated ? children : <Navigate to='/login' replace />;
 };
 

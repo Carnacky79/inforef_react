@@ -1,79 +1,84 @@
-import { createContext, useContext, useState, useEffect } from 'react';
-import { useAuth } from './AuthContext';
-import MockBlueIOTClient from '../blueiotClient';
+// DataContext.js
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { env } from '../services/env';
+import { BlueiotClient } from '../services/blueiotClient';
 
-export const DataContext = createContext();
-export function useData() {
-	return useContext(DataContext);
-}
+const DataContext = createContext();
 
-export function DataProvider({ children }) {
-	const { company, isAuthenticated } = useAuth();
-
+export const DataProvider = ({ children }) => {
 	const [sites, setSites] = useState([]);
 	const [currentSite, setCurrentSite] = useState(null);
+	const [tags, setTags] = useState([]);
+	const [positions, setPositions] = useState({});
 	const [employees, setEmployees] = useState([]);
 	const [assets, setAssets] = useState([]);
-	const [tags, setTags] = useState([]);
 	const [tagAssociations, setTagAssociations] = useState([]);
-	const [positions, setPositions] = useState({});
 
+	// In modalità mock, inizializza tutto per test
 	useEffect(() => {
-		if (isAuthenticated && company) {
-			setSites([
-				{
-					id: 1,
-					name: 'Cantiere Milano',
-					serverIp: '127.0.0.1',
-					serverPort: 48300,
-				},
-			]);
-		}
-	}, [isAuthenticated, company]);
-
-	useEffect(() => {
-		if (currentSite) {
+		if (env.useMock) {
+			const mockSite = {
+				id: 1,
+				name: 'Cantiere Milano',
+				serverIp: '127.0.0.1',
+				serverPort: 48300,
+			};
+			setSites([mockSite]);
+			setCurrentSite(mockSite);
 			setEmployees([{ id: 1, name: 'Mario Rossi' }]);
 			setAssets([{ id: 2, name: 'Gru 002' }]);
 			setTags([{ id: 'TAG001' }, { id: 'TAG002' }]);
 			setTagAssociations([
 				{ tagId: 'TAG001', targetType: 'employee', targetId: 1 },
 			]);
-			setPositions({});
+		}
+	}, []);
 
-			const client = new MockBlueIOTClient({ serverIp: currentSite.serverIp });
-			client.on('tagPosition', (data) => {
+	useEffect(() => {
+		if (currentSite) {
+			BlueiotClient.connect();
+			BlueiotClient.on('tagPosition', (data) => {
 				setPositions((prev) => ({
 					...prev,
 					[data.tagId]: { x: data.x, y: data.y, z: data.z },
 				}));
 			});
-			client.connect();
-
-			return () => client.disconnect();
 		}
+		return () => BlueiotClient.disconnect();
 	}, [currentSite]);
+
+	const associateTag = (tagId, targetType, targetId) => {
+		const updated = tagAssociations.filter((a) => a.tagId !== tagId);
+		if (targetType && targetId) {
+			updated.push({ tagId, targetType, targetId });
+		}
+		setTagAssociations(updated);
+	};
+
+	const selectSite = (id) => {
+		const site = sites.find((s) => s.id === id);
+		if (site) setCurrentSite(site);
+	};
 
 	return (
 		<DataContext.Provider
 			value={{
 				sites,
 				currentSite,
-				selectSite: (id) => setCurrentSite(sites.find((s) => s.id === id)),
+				selectSite,
 				employees,
+				setEmployees,
 				assets,
+				setAssets,
 				tags,
-				tagAssociations,
 				positions,
-				associateTag: (tagId, type, id) => {
-					const updated = tagAssociations.filter((a) => a.tagId !== tagId);
-					if (type && id)
-						updated.push({ tagId, targetType: type, targetId: id });
-					setTagAssociations(updated);
-				},
+				tagAssociations,
+				associateTag,
 			}}
 		>
 			{children}
 		</DataContext.Provider>
 	);
-}
+};
+
+export const useData = () => useContext(DataContext);

@@ -11,11 +11,11 @@ const LoginPage = () => {
 
 	const handleLogin = async (e) => {
 		e.preventDefault();
-		const result = await login(username, password);
-		if (result.success) {
+		const success = login(username, password); // non serve await perché è sincrona
+		if (success) {
 			navigate('/dashboard');
 		} else {
-			setError(result.error);
+			setError('Credenziali non valide');
 		}
 	};
 
