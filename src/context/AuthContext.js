@@ -1,74 +1,96 @@
-// AuthContext.js
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import md5 from 'blueimp-md5';
-import { env } from '../services/env';
+// In src/context/AuthContext.js, sostituisci la funzione login con questa versione più sicura:
+
+import React, { createContext, useContext, useState, useEffect } from "react";
+import md5 from "blueimp-md5";
+import { env } from "../services/env";
 
 const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
-	const [isAuthenticated, setIsAuthenticated] = useState(false);
-
-	// For development: auto-authenticate and set mock site if using mock
-	useEffect(() => {
-		if (env.useMock) {
-			setIsAuthenticated(true);
-		}
-	}, []);
-
-	const login = (username, password) => {
-		const hash = md5(password);
-		if (username === env.adminUser && hash === env.adminHash) {
-			setIsAuthenticated(true);
-			return true;
-		}
-		return false;
-	};
-
-	const logout = () => {
-		setIsAuthenticated(false);
-	};
-
-	return (
-		<AuthContext.Provider value={{ isAuthenticated, login, logout }}>
-			{children}
-		</AuthContext.Provider>
-	);
-};
-
-export const useAuth = () => useContext(AuthContext);
-
-/* import { createContext, useContext, useState } from 'react';
-
-export const AuthContext = createContext();
-
-export function useAuth() {
-  return useContext(AuthContext);
-}
-
-export function AuthProvider({ children }) {
-  const [currentUser, setCurrentUser] = useState(null);
-  const [company, setCompany] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [loginError, setLoginError] = useState(null);
 
-  const login = async (username, password) => {
-    if (username === 'admin' && password === 'password') {
-      setCurrentUser({ id: 1, username: 'admin' });
-      setCompany({ id: 1, name: 'Impresa Costruzioni SRL' });
+  // For development: auto-authenticate and set mock site if using mock
+  useEffect(() => {
+    if (env.useMock) {
       setIsAuthenticated(true);
-      return { success: true };
+      setCurrentUser({ username: env.REACT_APP_ADMIN_USERNAME, role: "admin" });
     }
-    return { success: false, error: 'Credenziali non valide' };
+  }, []);
+
+  const login = (username, password) => {
+    setLoginError(null);
+
+    // Per sicurezza, aggiungiamo una verifica sulla lunghezza della password
+    if (!password || password.length < 6) {
+      setLoginError("Password non valida");
+      return false;
+    }
+
+    // Calcolo dell'hash MD5 per confronto
+    const hash = md5(password);
+    console.log("Login attempt:", username);
+
+    // In produzione, si dovrebbe usare un metodo più sicuro (bcrypt, JWT, ecc.)
+    if (username === env.adminUser && hash === env.adminHash) {
+      setIsAuthenticated(true);
+      setCurrentUser({ username, role: "admin" });
+
+      // Salviamo il timestamp del login
+      localStorage.setItem("authTimestamp", Date.now().toString());
+      return true;
+    }
+
+    setLoginError("Credenziali non valide");
+    return false;
   };
 
   const logout = () => {
-    setCurrentUser(null);
-    setCompany(null);
     setIsAuthenticated(false);
+    setCurrentUser(null);
+    localStorage.removeItem("authTimestamp");
   };
 
+  // Verifica automatica della sessione ogni minuto
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const checkSession = () => {
+      const authTimestamp = localStorage.getItem("authTimestamp");
+      if (!authTimestamp) {
+        logout();
+        return;
+      }
+
+      // Timeout sessione dopo 8 ore (28800000 ms)
+      const SESSION_TIMEOUT = 28800000;
+      const now = Date.now();
+      const timeElapsed = now - parseInt(authTimestamp, 10);
+
+      if (timeElapsed > SESSION_TIMEOUT) {
+        console.log("Sessione scaduta");
+        logout();
+      }
+    };
+
+    const interval = setInterval(checkSession, 60000); // Controlla ogni minuto
+    return () => clearInterval(interval);
+  }, [isAuthenticated]);
+
   return (
-    <AuthContext.Provider value={{ currentUser, company, isAuthenticated, login, logout }}>
+    <AuthContext.Provider
+      value={{
+        isAuthenticated,
+        currentUser,
+        login,
+        logout,
+        loginError,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );
-} */
+};
+
+export const useAuth = () => useContext(AuthContext);

@@ -225,3 +225,74 @@ app.get('/api/map/:siteId', (req, res) => {
 		}
 	);
 });
+
+app.post('/api/associate', (req, res) => {
+  const { tagId, targetType, targetId, siteId } = req.body;
+  
+  if (!tagId || !targetType || !targetId || !siteId) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+  
+  // Verifica che il tipo di entità sia valido
+  if (targetType !== 'employee' && targetType !== 'asset') {
+    return res.status(400).json({ error: 'Invalid target type' });
+  }
+  
+  // Verifica l'esistenza del tag
+  db.get('SELECT id FROM tags WHERE id = ?', [tagId], (err, tagRow) => {
+    if (err) return res.status(500).json({ error: 'Database error' });
+    if (!tagRow) {
+      // Il tag non esiste, lo creiamo con batteria sconosciuta
+      db.run('INSERT INTO tags (id, battery) VALUES (?, ?)', [tagId, -1]);
+    }
+    
+    // Verifica che l'entità target esista nella tabella appropriata
+    const targetTable = targetType === 'employee' ? 'users' : 'assets';
+    db.get(`SELECT id FROM ${targetTable} WHERE id = ? AND companyId = ?`, 
+      [targetId, COMPANY_ID], 
+      (err, targetRow) => {
+        if (err) return res.status(500).json({ error: 'Database error' });
+        if (!targetRow) return res.status(404).json({ error: `${targetType} not found` });
+        
+        // Salva l'associazione
+        db.run(
+          `REPLACE INTO associations (tagId, targetType, targetId, siteId) VALUES (?, ?, ?, ?)`,
+          [tagId, targetType, targetId, siteId],
+          (err) => {
+            if (err) return res.status(500).json({ error: 'Database error' });
+            
+            // Registra l'azione nel log
+            db.run(
+              `INSERT INTO logs (type, message, siteId) VALUES (?, ?, ?)`,
+              ['ASSOCIATION', `Tag ${tagId} associated with ${targetType} ${targetId}`, siteId]
+            );
+            
+            res.json({ success: true });
+          }
+        );
+      }
+    );
+  });
+});
+
+// Aggiungi anche un endpoint per ottenere le associazioni dei tag
+app.get('/api/associations/:siteId', (req, res) => {
+  const siteId = req.params.siteId;
+  
+  db.all(
+    `SELECT a.*, 
+      CASE 
+        WHEN a.targetType = 'employee' THEN u.name 
+        ELSE ast.name 
+      END as targetName
+    FROM associations a
+    LEFT JOIN users u ON a.targetType = 'employee' AND a.targetId = u.id
+    LEFT JOIN assets ast ON a.targetType = 'asset' AND a.targetId = ast.id
+    WHERE a.siteId = ?`,
+    [siteId],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: 'Database error' });
+      res.json(rows);
+    }
+  );
+});

@@ -7,6 +7,8 @@ export const env = {
 	crmUrl: process.env.REACT_APP_CRM_BASE_URL,
 	backendUrl: process.env.REACT_APP_BACKEND_URL,
 	blueiotHost: process.env.REACT_APP_BLUEIOT_HOST,
+	blueiotUsername: process.env.REACT_APP_BLUEIOT_USERNAME,
+	blueiotPassword: process.env.REACT_APP_BLUEIOT_PASSWORD,
 };
 
 console.log('[ENV]', {

@@ -1,7 +1,9 @@
-import { env } from './env';
-import { MockBlueiotClient } from './mockBlueiotClient';
-import { RealBlueiotClient } from './realBlueiotClient';
+import { env } from "./env";
+import { MockBlueiotClient } from "./mockBlueiotClient";
+import { RealBlueiotClient } from "./realBlueiotClient";
 
-export const BlueiotClient = env.useMock
-	? MockBlueiotClient
-	: RealBlueiotClient;
+// Usa il client mock o reale basato sulla configurazione
+export const BlueiotClient =
+  env.useMock === "true" || env.useMock === true
+    ? MockBlueiotClient
+    : RealBlueiotClient;
