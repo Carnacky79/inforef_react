@@ -1,4 +1,3 @@
-// src/context/DataContext.js
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { env } from "../services/env";
 import { BlueiotClient } from "../services/blueiotClient";
@@ -20,8 +19,29 @@ export const DataProvider = ({ children }) => {
   const [isConnected, setIsConnected] = useState(false);
   const [connectionError, setConnectionError] = useState(null);
 
-  // In modalità mock, inizializza tutto per test
+  // Tenta di caricare la configurazione al primo avvio
   useEffect(() => {
+    // Carica dal localStorage la configurazione salvata
+    try {
+      const savedSiteId = localStorage.getItem("blueiot_currentSiteId");
+      const savedSiteData = localStorage.getItem("blueiot_siteData");
+
+      if (savedSiteData) {
+        const parsedSite = JSON.parse(savedSiteData);
+        setCurrentSite(parsedSite);
+
+        if (!sites.some((site) => site.id === parsedSite.id)) {
+          setSites((prev) => [...prev, parsedSite]);
+        }
+      }
+    } catch (error) {
+      console.error(
+        "Errore nel caricamento della configurazione dal localStorage:",
+        error
+      );
+    }
+
+    // In modalità mock, inizializza tutto per test
     if (env.useMock === "true" || env.useMock === true) {
       const mockSite = {
         id: 1,
@@ -81,6 +101,14 @@ export const DataProvider = ({ children }) => {
   // Connessione al server BlueIOT quando cambia il sito corrente
   useEffect(() => {
     if (!currentSite) return;
+
+    // Salva la configurazione in localStorage
+    try {
+      localStorage.setItem("blueiot_currentSiteId", currentSite.id.toString());
+      localStorage.setItem("blueiot_siteData", JSON.stringify(currentSite));
+    } catch (error) {
+      console.error("Errore nel salvataggio della configurazione:", error);
+    }
 
     // Connetti al server BlueIOT
     console.log(
@@ -281,7 +309,55 @@ export const DataProvider = ({ children }) => {
   // Seleziona un sito come corrente
   const selectSite = (id) => {
     const site = sites.find((s) => s.id === id);
-    if (site) setCurrentSite(site);
+    if (site) {
+      setCurrentSite(site);
+
+      // Salva la selezione del sito in localStorage
+      try {
+        localStorage.setItem("blueiot_currentSiteId", id.toString());
+        localStorage.setItem("blueiot_siteData", JSON.stringify(site));
+      } catch (error) {
+        console.error(
+          "Errore nel salvataggio della selezione del sito:",
+          error
+        );
+      }
+    }
+  };
+
+  // Aggiorna le proprietà di un sito esistente
+  const updateSite = (updatedSite) => {
+    if (!updatedSite || !updatedSite.id) return;
+
+    setSites((prev) =>
+      prev.map((site) =>
+        site.id === updatedSite.id ? { ...site, ...updatedSite } : site
+      )
+    );
+
+    if (currentSite && currentSite.id === updatedSite.id) {
+      setCurrentSite({ ...currentSite, ...updatedSite });
+
+      // Salva l'aggiornamento in localStorage
+      try {
+        localStorage.setItem(
+          "blueiot_siteData",
+          JSON.stringify({ ...currentSite, ...updatedSite })
+        );
+      } catch (error) {
+        console.error(
+          "Errore nel salvataggio dell'aggiornamento del sito:",
+          error
+        );
+      }
+    }
+
+    // In una vera implementazione, qui invieresti l'aggiornamento al server
+    // fetch(`${env.REACT_APP_BACKEND_URL}/api/sites/${updatedSite.id}`, {
+    //   method: 'PUT',
+    //   headers: { 'Content-Type': 'application/json' },
+    //   body: JSON.stringify(updatedSite)
+    // });
   };
 
   // Invia comando di vibrazione a un tag
@@ -393,6 +469,7 @@ export const DataProvider = ({ children }) => {
         sites,
         currentSite,
         selectSite,
+        updateSite,
         employees,
         setEmployees,
         assets,

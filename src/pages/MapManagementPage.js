@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useData } from "../context/DataContext";
 import { DxfViewer } from "../components/DxfViewer";
 
 const MapManagementPage = () => {
-  const { currentSite } = useData();
+  const { currentSite, updateSite } = useData();
   const [serverIp, setServerIp] = useState(currentSite?.serverIp || "");
   const [serverPort, setServerPort] = useState(
     currentSite?.serverPort || 48300
@@ -11,92 +11,135 @@ const MapManagementPage = () => {
   const [mapFile, setMapFile] = useState(null);
   const [mapData, setMapData] = useState(null);
   const [message, setMessage] = useState("");
-  const [definedAreas, setDefinedAreas] = useState([]);
-  const [areaName, setAreaName] = useState("");
-  const [areaType, setAreaType] = useState("geofence");
-  const [isDefiningArea, setIsDefiningArea] = useState(false);
 
+  // Carica la configurazione salvata quando la pagina viene caricata
+  useEffect(() => {
+    loadSavedConfiguration();
+  }, []);
+
+  // Carica la configurazione salvata
+  const loadSavedConfiguration = () => {
+    // Tenta di caricare la mappa dal localStorage
+    try {
+      const savedMapData = localStorage.getItem("blueiot_mapData");
+      const savedMapName = localStorage.getItem("blueiot_mapName");
+      const savedServerIp = localStorage.getItem("blueiot_serverIp");
+      const savedServerPort = localStorage.getItem("blueiot_serverPort");
+
+      if (savedMapData) {
+        setMapData(savedMapData);
+
+        if (savedMapName) {
+          setMapFile({ name: savedMapName });
+          setMessage("Configurazione caricata automaticamente.");
+        }
+
+        if (savedServerIp) {
+          setServerIp(savedServerIp);
+        }
+
+        if (savedServerPort) {
+          setServerPort(parseInt(savedServerPort) || 48300);
+        }
+      }
+    } catch (error) {
+      console.error("Errore nel caricamento della configurazione:", error);
+    }
+  };
+
+  // Salva la configurazione corrente
+  const saveCurrentConfiguration = () => {
+    try {
+      if (mapData) {
+        localStorage.setItem("blueiot_mapData", mapData);
+      }
+
+      if (mapFile?.name) {
+        localStorage.setItem("blueiot_mapName", mapFile.name);
+      }
+
+      localStorage.setItem("blueiot_serverIp", serverIp);
+      localStorage.setItem("blueiot_serverPort", serverPort.toString());
+
+      // Se l'API updateSite è disponibile nel contesto, aggiorna anche lì
+      if (updateSite && currentSite) {
+        updateSite({
+          ...currentSite,
+          serverIp,
+          serverPort,
+          mapFile: mapFile?.name || currentSite.mapFile,
+        });
+      }
+
+      setMessage("Configurazione salvata con successo!");
+    } catch (error) {
+      console.error("Errore nel salvataggio della configurazione:", error);
+      setMessage("Errore nel salvataggio della configurazione.");
+    }
+  };
+
+  // Gestisce il caricamento dei file
   const handleFileChange = (e) => {
     const file = e.target.files[0];
-    if (file && file.name.endsWith(".dxf")) {
+    if (!file) return;
+
+    if (file.name.toLowerCase().endsWith(".dxf")) {
       setMapFile(file);
 
-      // Leggi il contenuto del file
+      // Usa FileReader per leggere il contenuto del file
       const reader = new FileReader();
       reader.onload = (event) => {
-        setMapData(event.target.result);
-        setMessage("Mappa caricata localmente.");
+        const result = event.target.result;
+
+        // Verifica che il file sia un DXF valido (dovrebbe iniziare con 0\nSECTION o simile)
+        if (
+          typeof result === "string" &&
+          (result.trim().startsWith("0") || result.includes("SECTION"))
+        ) {
+          setMapData(result);
+          setMessage("Mappa caricata correttamente.");
+
+          // Salva automaticamente il file caricato nel localStorage
+          localStorage.setItem("blueiot_mapData", result);
+          localStorage.setItem("blueiot_mapName", file.name);
+        } else {
+          console.warn(
+            "Il file potrebbe non essere un file DXF valido:",
+            result.substring(0, 100)
+          );
+          setMessage(
+            "Avviso: Il file potrebbe non essere un DXF valido. Controllare il formato."
+          );
+        }
       };
+
+      // Leggi come testo per i file DXF
       reader.readAsText(file);
     } else {
-      setMessage("Formato file non valido. Caricare un file DXF.");
+      setMessage("Formato file non valido. Caricare un file DXF (.dxf).");
     }
   };
 
   const handleSave = () => {
-    if (!mapFile) {
-      setMessage("Caricare prima un file DXF.");
-      return;
-    }
+    // Salva la configurazione
+    saveCurrentConfiguration();
 
-    setMessage("Salvataggio in corso...");
-
-    // Mock API call to save the configuration
-    setTimeout(() => {
-      setMessage("Configurazione salvata con successo!");
-    }, 1000);
-
-    // In a real implementation, you would send the data to the server
+    // In una implementazione reale, dovresti inviare i dati al server
     // const formData = new FormData();
     // formData.append('mapFile', mapFile);
     // formData.append('serverIp', serverIp);
     // formData.append('serverPort', serverPort);
     // formData.append('siteId', currentSite.id);
-
-    // fetch('/api/map-file', {
-    //   method: 'POST',
-    //   body: formData
-    // }).then(...)
-  };
-
-  const handleAreaDefined = (points) => {
-    if (areaName.trim() === "") {
-      setMessage("Inserire un nome per l'area prima di definirla.");
-      return;
-    }
-
-    const newArea = {
-      id: Date.now(),
-      name: areaName,
-      type: areaType,
-      points: points,
-    };
-
-    setDefinedAreas([...definedAreas, newArea]);
-    setAreaName("");
-    setIsDefiningArea(false);
-    setMessage(`Area "${newArea.name}" definita con successo.`);
-  };
-
-  const startDefiningArea = () => {
-    if (areaName.trim() === "") {
-      setMessage("Inserire un nome per l'area prima di definirla.");
-      return;
-    }
-
-    setIsDefiningArea(true);
-    setMessage(
-      "Fare clic sulla mappa per definire i punti dell'area. Doppio clic per completare."
-    );
+    // fetch('/api/map-file', { method: 'POST', body: formData });
   };
 
   return (
     <div className="p-6">
       <h1 className="text-2xl font-semibold mb-4">Gestione Mappa</h1>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
         {/* Configuration Form */}
-        <div className="bg-white p-4 rounded shadow space-y-4">
+        <div className="bg-white p-4 rounded shadow space-y-4 lg:col-span-1">
           <h2 className="text-lg font-medium">Configurazione Server</h2>
           <div>
             <label className="block mb-1 font-medium">Carica file DXF:</label>
@@ -129,7 +172,7 @@ const MapManagementPage = () => {
               type="number"
               className="w-full p-2 border rounded"
               value={serverPort}
-              onChange={(e) => setServerPort(e.target.value)}
+              onChange={(e) => setServerPort(parseInt(e.target.value) || 48300)}
               placeholder="48300"
             />
           </div>
@@ -144,73 +187,11 @@ const MapManagementPage = () => {
           )}
         </div>
 
-        {/* Area Definition */}
-        <div className="bg-white p-4 rounded shadow space-y-4">
-          <h2 className="text-lg font-medium">Definizione Aree</h2>
-          <div>
-            <label className="block mb-1 font-medium">Nome Area:</label>
-            <input
-              className="w-full p-2 border rounded"
-              value={areaName}
-              onChange={(e) => setAreaName(e.target.value)}
-              placeholder="Area 1"
-              disabled={isDefiningArea}
-            />
-          </div>
-          <div>
-            <label className="block mb-1 font-medium">Tipo Area:</label>
-            <select
-              className="w-full p-2 border rounded"
-              value={areaType}
-              onChange={(e) => setAreaType(e.target.value)}
-              disabled={isDefiningArea}
-            >
-              <option value="geofence">Geo-fence</option>
-              <option value="attendance">Area presenze</option>
-              <option value="restricted">Area ristretta</option>
-            </select>
-          </div>
-          <button
-            onClick={startDefiningArea}
-            className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
-            disabled={isDefiningArea || !mapData}
-          >
-            {isDefiningArea ? "Definizione in corso..." : "Definisci Area"}
-          </button>
-
-          <div className="mt-4">
-            <h3 className="font-medium">Aree Definite:</h3>
-            {definedAreas.length === 0 ? (
-              <p className="text-gray-500 text-sm mt-2">
-                Nessuna area definita
-              </p>
-            ) : (
-              <ul className="mt-2 divide-y divide-gray-200">
-                {definedAreas.map((area) => (
-                  <li key={area.id} className="py-2">
-                    <div className="flex justify-between">
-                      <span className="font-medium">{area.name}</span>
-                      <span className="text-sm text-gray-500">{area.type}</span>
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      {area.points.length} punti definiti
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
-
         {/* DXF Viewer */}
-        <div className="bg-white p-4 rounded shadow lg:col-span-1">
-          <h2 className="text-lg font-medium mb-2">Anteprima Mappa</h2>
-          <div className="h-96 overflow-hidden">
-            <DxfViewer
-              data={mapData}
-              height="100%"
-              onAreaDefined={isDefiningArea ? handleAreaDefined : null}
-            />
+        <div className="bg-white p-4 rounded shadow lg:col-span-3">
+          <h2 className="text-lg font-medium mb-2">Planimetria</h2>
+          <div className="h-[600px] overflow-hidden">
+            <DxfViewer data={mapData} height="100%" />
           </div>
         </div>
       </div>

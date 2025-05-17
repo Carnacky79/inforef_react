@@ -1,615 +1,513 @@
 import React, { useEffect, useRef, useState } from "react";
+import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 
 /**
- * Visualizzatore DXF personalizzato che non dipende da librerie esterne
- * Supporta visualizzazione base di entità DXF come linee e cerchi
+ * Componente DxfViewer con qualità migliorata
+ * Ottimizzato per una visualizzazione chiara delle planimetrie
  */
-export function DxfViewer({
-  data,
-  width = "100%",
-  height = "400px",
-  tagPositions = {},
-  onAreaDefined = null,
-}) {
-  const canvasRef = useRef(null);
+export function DxfViewer({ data, width = "100%", height = "400px" }) {
+  const containerRef = useRef(null);
+  const rendererRef = useRef(null);
+  const sceneRef = useRef(null);
+  const cameraRef = useRef(null);
+  const controlsRef = useRef(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [isAreaMode, setIsAreaMode] = useState(false);
-  const [areaPoints, setAreaPoints] = useState([]);
-  const [scale, setScale] = useState(1);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [bounds, setBounds] = useState({
-    minX: 0,
-    minY: 0,
-    maxX: 100,
-    maxY: 100,
-  });
-  const [isPanning, setIsPanning] = useState(false);
-  const [lastPos, setLastPos] = useState({ x: 0, y: 0 });
+  const animationFrameRef = useRef(null);
 
-  // Impostazioni di visualizzazione
-  const [viewSettings, setViewSettings] = useState({
-    gridSize: 10,
-    padding: 20,
-    showGrid: true,
-    backgroundColor: "#f8f8f8",
-    lineColor: "#3b82f6",
-    circleColor: "#3b82f6",
-    gridColor: "#e0e0e0",
-  });
-
-  // Stato per il rendering
-  const dxfElements = useRef([]);
-
-  // Attiva la modalità di definizione area
+  // Inizializza il renderer Three.js con alta qualità
   useEffect(() => {
-    setIsAreaMode(!!onAreaDefined);
-  }, [onAreaDefined]);
+    if (!containerRef.current) return;
 
-  // Analizza il file DXF
-  const parseDxf = (dxfContent) => {
     try {
       setLoading(true);
 
-      // Verifica se è un file DXF valido
-      if (!dxfContent.includes("ENTITIES") || !dxfContent.includes("SECTION")) {
-        throw new Error("File DXF non valido o non supportato");
-      }
+      // Ottieni le dimensioni del container
+      const width = containerRef.current.clientWidth;
+      const height = containerRef.current.clientHeight;
 
-      // Estrai sezioni ENTITIES che contengono gli elementi da disegnare
-      const entitiesMatch = dxfContent.match(/ENTITIES([\s\S]*?)ENDSEC/);
-      if (!entitiesMatch) {
-        throw new Error("Nessuna entità trovata nel file DXF");
-      }
+      // Inizializza la scena Three.js
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xffffff); // Sfondo bianco per maggiore chiarezza
+      sceneRef.current = scene;
 
-      const entitiesSection = entitiesMatch[1];
-      const elements = [];
+      // Inizializza la camera
+      const camera = new THREE.PerspectiveCamera(
+        45,
+        width / height,
+        0.1,
+        10000
+      );
+      camera.position.set(0, 0, 100);
+      cameraRef.current = camera;
 
-      // Limiti per calcolare il riquadro di delimitazione
-      let minX = Infinity,
-        minY = Infinity;
-      let maxX = -Infinity,
-        maxY = -Infinity;
-
-      // Cerca linee nel DXF
-      const linePattern =
-        /LINE[\s\S]*?10\s+([-\d.]+)[\s\S]*?20\s+([-\d.]+)[\s\S]*?11\s+([-\d.]+)[\s\S]*?21\s+([-\d.]+)/g;
-      let lineMatch;
-
-      while ((lineMatch = linePattern.exec(entitiesSection)) !== null) {
-        const x1 = parseFloat(lineMatch[1]);
-        const y1 = parseFloat(lineMatch[2]);
-        const x2 = parseFloat(lineMatch[3]);
-        const y2 = parseFloat(lineMatch[4]);
-
-        // Aggiorna i limiti
-        minX = Math.min(minX, x1, x2);
-        minY = Math.min(minY, y1, y2);
-        maxX = Math.max(maxX, x1, x2);
-        maxY = Math.max(maxY, y1, y2);
-
-        elements.push({
-          type: "line",
-          x1,
-          y1,
-          x2,
-          y2,
-        });
-      }
-
-      // Cerca archi nel DXF
-      const arcPattern =
-        /ARC[\s\S]*?10\s+([-\d.]+)[\s\S]*?20\s+([-\d.]+)[\s\S]*?40\s+([-\d.]+)[\s\S]*?50\s+([-\d.]+)[\s\S]*?51\s+([-\d.]+)/g;
-      let arcMatch;
-
-      while ((arcMatch = arcPattern.exec(entitiesSection)) !== null) {
-        const x = parseFloat(arcMatch[1]);
-        const y = parseFloat(arcMatch[2]);
-        const radius = parseFloat(arcMatch[3]);
-        const startAngle = parseFloat(arcMatch[4]) * (Math.PI / 180);
-        const endAngle = parseFloat(arcMatch[5]) * (Math.PI / 180);
-
-        // Aggiorna i limiti
-        minX = Math.min(minX, x - radius);
-        minY = Math.min(minY, y - radius);
-        maxX = Math.max(maxX, x + radius);
-        maxY = Math.max(maxY, y + radius);
-
-        elements.push({
-          type: "arc",
-          x,
-          y,
-          radius,
-          startAngle,
-          endAngle,
-        });
-      }
-
-      // Cerca cerchi nel DXF
-      const circlePattern =
-        /CIRCLE[\s\S]*?10\s+([-\d.]+)[\s\S]*?20\s+([-\d.]+)[\s\S]*?40\s+([-\d.]+)/g;
-      let circleMatch;
-
-      while ((circleMatch = circlePattern.exec(entitiesSection)) !== null) {
-        const x = parseFloat(circleMatch[1]);
-        const y = parseFloat(circleMatch[2]);
-        const radius = parseFloat(circleMatch[3]);
-
-        // Aggiorna i limiti
-        minX = Math.min(minX, x - radius);
-        minY = Math.min(minY, y - radius);
-        maxX = Math.max(maxX, x + radius);
-        maxY = Math.max(maxY, y + radius);
-
-        elements.push({
-          type: "circle",
-          x,
-          y,
-          radius,
-        });
-      }
-
-      // Se non abbiamo trovato elementi, usa valori predefiniti
-      if (elements.length === 0) {
-        minX = 0;
-        minY = 0;
-        maxX = 100;
-        maxY = 100;
-      }
-
-      // Imposta i limiti con un margine
-      setBounds({
-        minX: minX - 10,
-        minY: minY - 10,
-        maxX: maxX + 10,
-        maxY: maxY + 10,
+      // Inizializza il renderer con alta qualità
+      const renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: true,
+        preserveDrawingBuffer: true,
       });
+      renderer.setSize(width, height);
+      // Usa un pixel ratio più alto per maggiore nitidezza
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      containerRef.current.appendChild(renderer.domElement);
+      rendererRef.current = renderer;
 
-      // Memorizza gli elementi
-      dxfElements.current = elements;
+      // Aggiungi controlli per navigazione
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.25;
+      controls.screenSpacePanning = true;
+      controls.minDistance = 10;
+      controls.maxDistance = 5000;
+      controls.maxPolarAngle = Math.PI / 2;
+      controls.enableRotate = false; // Disabilita rotazione per planimetrie 2D
+      controlsRef.current = controls;
+
+      // Aggiungi luci
+      const ambientLight = new THREE.AmbientLight(0xffffff, 1.0); // Luce piena per planimetrie
+      scene.add(ambientLight);
+
+      // Funzione di animazione
+      const animate = () => {
+        animationFrameRef.current = requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+      };
+
+      animate();
+
+      // Gestione ridimensionamento finestra
+      const handleResize = () => {
+        if (!containerRef.current || !rendererRef.current || !cameraRef.current)
+          return;
+
+        const width = containerRef.current.clientWidth;
+        const height = containerRef.current.clientHeight;
+
+        cameraRef.current.aspect = width / height;
+        cameraRef.current.updateProjectionMatrix();
+
+        rendererRef.current.setSize(width, height);
+      };
+
+      window.addEventListener("resize", handleResize);
 
       setLoading(false);
-      return elements;
-    } catch (err) {
-      console.error("Errore durante l'analisi del DXF:", err);
-      setError(err.message);
+
+      // Cleanup
+      return () => {
+        window.removeEventListener("resize", handleResize);
+
+        if (animationFrameRef.current) {
+          cancelAnimationFrame(animationFrameRef.current);
+        }
+
+        if (rendererRef.current) {
+          containerRef.current?.removeChild(rendererRef.current.domElement);
+          rendererRef.current.dispose();
+        }
+
+        // Pulisci la scena
+        if (sceneRef.current) {
+          sceneRef.current.clear();
+        }
+      };
+    } catch (error) {
+      console.error("Errore nell'inizializzazione del visualizzatore:", error);
+      setError(`Errore nell'inizializzazione: ${error.message}`);
       setLoading(false);
-      return [];
     }
-  };
+  }, []);
 
-  // Calcola la trasformazione da coordinate DXF a canvas
-  const getTransform = (canvasWidth, canvasHeight, bounds) => {
-    const { minX, minY, maxX, maxY } = bounds;
-    const dxfWidth = maxX - minX;
-    const dxfHeight = maxY - minY;
+  // Carica e visualizza i dati DXF
+  useEffect(() => {
+    if (!sceneRef.current || !data) return;
 
-    const padding = viewSettings.padding;
-    const availableWidth = canvasWidth - padding * 2;
-    const availableHeight = canvasHeight - padding * 2;
+    setLoading(true);
 
-    // Calcola scala preservando le proporzioni
-    const scaleX = availableWidth / dxfWidth;
-    const scaleY = availableHeight / dxfHeight;
-    const scale = Math.min(scaleX, scaleY);
+    try {
+      console.log("Inizio parsing DXF...");
 
-    // Centra il disegno
-    const offsetX = padding + (availableWidth - dxfWidth * scale) / 2;
-    const offsetY = padding + (availableHeight - dxfHeight * scale) / 2;
-
-    setScale(scale);
-    setOffset({ x: offsetX - minX * scale, y: offsetY - minY * scale });
-
-    return {
-      scale,
-      offsetX: offsetX - minX * scale,
-      offsetY: offsetY - minY * scale,
-    };
-  };
-
-  // Funzione per trasformare coordinate DXF in coordinate canvas
-  const dxfToCanvas = (x, y, transform) => {
-    return {
-      x: x * transform.scale + transform.offsetX,
-      y: canvasRef.current.height - (y * transform.scale + transform.offsetY),
-    };
-  };
-
-  // Funzione per trasformare coordinate canvas in coordinate DXF
-  const canvasToDxf = (x, y, transform) => {
-    return {
-      x: (x - transform.offsetX) / transform.scale,
-      y: (canvasRef.current.height - y - transform.offsetY) / transform.scale,
-    };
-  };
-
-  // Disegna la griglia
-  const drawGrid = (ctx, transform) => {
-    const { minX, minY, maxX, maxY } = bounds;
-    const gridSize = viewSettings.gridSize;
-
-    ctx.strokeStyle = viewSettings.gridColor;
-    ctx.lineWidth = 0.5;
-
-    // Disegna linee verticali
-    for (
-      let x = Math.floor(minX / gridSize) * gridSize;
-      x <= maxX;
-      x += gridSize
-    ) {
-      const pos = dxfToCanvas(x, 0, transform);
-      ctx.beginPath();
-      ctx.moveTo(pos.x, 0);
-      ctx.lineTo(pos.x, ctx.canvas.height);
-      ctx.stroke();
-    }
-
-    // Disegna linee orizzontali
-    for (
-      let y = Math.floor(minY / gridSize) * gridSize;
-      y <= maxY;
-      y += gridSize
-    ) {
-      const pos = dxfToCanvas(0, y, transform);
-      ctx.beginPath();
-      ctx.moveTo(0, pos.y);
-      ctx.lineTo(ctx.canvas.width, pos.y);
-      ctx.stroke();
-    }
-  };
-
-  // Disegna gli elementi DXF
-  const drawDxfElements = (ctx, elements, transform) => {
-    ctx.strokeStyle = viewSettings.lineColor;
-    ctx.lineWidth = 1;
-
-    elements.forEach((element) => {
-      switch (element.type) {
-        case "line":
-          const start = dxfToCanvas(element.x1, element.y1, transform);
-          const end = dxfToCanvas(element.x2, element.y2, transform);
-
-          ctx.beginPath();
-          ctx.moveTo(start.x, start.y);
-          ctx.lineTo(end.x, end.y);
-          ctx.stroke();
-          break;
-
-        case "circle":
-          const center = dxfToCanvas(element.x, element.y, transform);
-          const radiusPixels = element.radius * transform.scale;
-
-          ctx.beginPath();
-          ctx.arc(center.x, center.y, radiusPixels, 0, Math.PI * 2);
-          ctx.stroke();
-          break;
-
-        case "arc":
-          const arcCenter = dxfToCanvas(element.x, element.y, transform);
-          const arcRadiusPixels = element.radius * transform.scale;
-          // DXF usa angoli in senso antiorario, canvas usa angoli in senso orario
-          const startAngle = Math.PI * 2 - element.endAngle;
-          const endAngle = Math.PI * 2 - element.startAngle;
-
-          ctx.beginPath();
-          ctx.arc(
-            arcCenter.x,
-            arcCenter.y,
-            arcRadiusPixels,
-            startAngle,
-            endAngle,
-            true
-          );
-          ctx.stroke();
-          break;
-
-        default:
-          break;
-      }
-    });
-  };
-
-  // Disegna i tag
-  const drawTags = (ctx, tagPositions, transform) => {
-    Object.entries(tagPositions).forEach(([tagId, pos]) => {
-      // Colore in base al tipo
-      const tagColor = pos.type === "employee" ? "#3b82f6" : "#10b981";
-      const tagSize = 5;
-
-      // Converti le coordinate del tag
-      const tagPos = dxfToCanvas(pos.x, pos.y, transform);
-
-      // Disegna cerchio
-      ctx.fillStyle = tagColor;
-      ctx.beginPath();
-      ctx.arc(tagPos.x, tagPos.y, tagSize, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Disegna etichetta
-      ctx.fillStyle = "#000000";
-      ctx.font = "10px Arial";
-      ctx.textAlign = "center";
-      ctx.fillText(pos.name || tagId, tagPos.x, tagPos.y - 10);
-    });
-  };
-
-  // Disegna i punti dell'area in definizione
-  const drawAreaPoints = (ctx, points, transform) => {
-    if (points.length === 0) return;
-
-    ctx.fillStyle = "#ff0000";
-    ctx.strokeStyle = "#ff0000";
-    ctx.lineWidth = 2;
-
-    // Disegna i punti
-    points.forEach((point, index) => {
-      const pos = dxfToCanvas(point.x, point.y, transform);
-
-      // Disegna cerchio
-      ctx.beginPath();
-      ctx.arc(pos.x, pos.y, 5, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Disegna linea se non è il primo punto
-      if (index > 0) {
-        const prevPos = dxfToCanvas(
-          points[index - 1].x,
-          points[index - 1].y,
-          transform
-        );
-        ctx.beginPath();
-        ctx.moveTo(prevPos.x, prevPos.y);
-        ctx.lineTo(pos.x, pos.y);
-        ctx.stroke();
-      }
-    });
-
-    // Chiudi il poligono se ci sono più di 2 punti
-    if (points.length > 2) {
-      const firstPos = dxfToCanvas(points[0].x, points[0].y, transform);
-      const lastPos = dxfToCanvas(
-        points[points.length - 1].x,
-        points[points.length - 1].y,
-        transform
+      // Rimuovi geometrie DXF precedenti
+      sceneRef.current.children = sceneRef.current.children.filter(
+        (child) => !(child instanceof THREE.Line && child.userData.isDxf)
       );
 
-      ctx.beginPath();
-      ctx.moveTo(lastPos.x, lastPos.y);
-      ctx.lineTo(firstPos.x, firstPos.y);
-      ctx.stroke();
+      // Parser DXF
+      const result = parseDxfToThree(data, sceneRef.current);
 
-      // Riempi il poligono con trasparenza
-      ctx.globalAlpha = 0.2;
-      ctx.beginPath();
-      points.forEach((point, index) => {
-        const pos = dxfToCanvas(point.x, point.y, transform);
-        if (index === 0) {
-          ctx.moveTo(pos.x, pos.y);
-        } else {
-          ctx.lineTo(pos.x, pos.y);
-        }
-      });
-      ctx.closePath();
-      ctx.fill();
-      ctx.globalAlpha = 1.0;
-    }
-  };
-
-  // Render completo
-  const renderCanvas = () => {
-    if (!canvasRef.current) return;
-
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-
-    // Imposta le dimensioni del canvas
-    canvas.width = canvas.clientWidth;
-    canvas.height = canvas.clientHeight;
-
-    // Pulisci il canvas
-    ctx.fillStyle = viewSettings.backgroundColor;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // Calcola la trasformazione
-    const transform = getTransform(canvas.width, canvas.height, bounds);
-
-    // Disegna la griglia
-    if (viewSettings.showGrid) {
-      drawGrid(ctx, transform);
-    }
-
-    // Disegna gli elementi DXF
-    drawDxfElements(ctx, dxfElements.current, transform);
-
-    // Disegna i tag
-    drawTags(ctx, tagPositions, transform);
-
-    // Disegna i punti dell'area in definizione
-    drawAreaPoints(ctx, areaPoints, transform);
-
-    // Disegna informazioni sulla scala
-    ctx.fillStyle = "rgba(0,0,0,0.5)";
-    ctx.font = "12px Arial";
-    ctx.textAlign = "left";
-    ctx.fillText(`Scala: 1:${(1 / transform.scale).toFixed(2)}`, 10, 20);
-  };
-
-  // Gestione eventi del mouse
-  const handleMouseDown = (e) => {
-    const rect = canvasRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-
-    if (e.buttons === 1) {
-      // Click sinistro
-      if (isAreaMode) {
-        // Calcola le coordinate DXF
-        const transform = getTransform(
-          canvasRef.current.width,
-          canvasRef.current.height,
-          bounds
+      if (result.entitiesCount > 0) {
+        // Centra la vista sui contenuti
+        centerView();
+        console.log(
+          "Parsing DXF completato con successo:",
+          result.entitiesCount,
+          "entità"
         );
-        const dxfPoint = canvasToDxf(x, y, transform);
-
-        // Aggiungi il punto
-        setAreaPoints([...areaPoints, dxfPoint]);
-
-        // Se è un doppio clic, completa l'area
-        if (e.detail === 2 && areaPoints.length >= 2) {
-          if (onAreaDefined) {
-            onAreaDefined([...areaPoints, dxfPoint]);
-          }
-          setAreaPoints([]);
-        }
       } else {
-        // Modalità pan
-        setIsPanning(true);
-        setLastPos({ x, y });
+        console.warn("Nessuna entità DXF trovata da visualizzare");
       }
+
+      setLoading(false);
+    } catch (err) {
+      console.error("Errore durante il caricamento del DXF:", err);
+      setError(`Errore durante il parsing DXF: ${err.message}`);
+      setLoading(false);
     }
-  };
-
-  const handleMouseMove = (e) => {
-    if (!isPanning) return;
-
-    const rect = canvasRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-
-    // Calcola spostamento
-    const deltaX = x - lastPos.x;
-    const deltaY = y - lastPos.y;
-
-    // Aggiorna offset
-    setOffset((prev) => ({
-      x: prev.x + deltaX,
-      y: prev.y - deltaY,
-    }));
-
-    // Aggiorna ultima posizione
-    setLastPos({ x, y });
-
-    // Renderizza
-    renderCanvas();
-  };
-
-  const handleMouseUp = () => {
-    setIsPanning(false);
-  };
-
-  const handleWheel = (e) => {
-    e.preventDefault();
-
-    const rect = canvasRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-
-    // Calcola coordinate DXF del punto di zoom
-    const transform = getTransform(
-      canvasRef.current.width,
-      canvasRef.current.height,
-      bounds
-    );
-    const dxfPoint = canvasToDxf(x, y, transform);
-
-    // Calcola il fattore di zoom
-    const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
-
-    // Aggiorna bounds per lo zoom
-    setBounds((prev) => {
-      const centerX = dxfPoint.x;
-      const centerY = dxfPoint.y;
-
-      // Calcola nuovi limiti
-      const newWidth = (prev.maxX - prev.minX) / zoomFactor;
-      const newHeight = (prev.maxY - prev.minY) / zoomFactor;
-
-      // Mantieni il punto sotto il cursore fisso
-      const offsetX = (centerX - prev.minX) / (prev.maxX - prev.minX);
-      const offsetY = (centerY - prev.minY) / (prev.maxY - prev.minY);
-
-      const newMinX = centerX - newWidth * offsetX;
-      const newMinY = centerY - newHeight * offsetY;
-
-      return {
-        minX: newMinX,
-        minY: newMinY,
-        maxX: newMinX + newWidth,
-        maxY: newMinY + newHeight,
-      };
-    });
-
-    // Renderizza
-    renderCanvas();
-  };
-
-  // Inizializza e carica DXF
-  useEffect(() => {
-    if (!data) return;
-
-    parseDxf(data);
   }, [data]);
 
-  // Renderizza quando cambiano elementi rilevanti
-  useEffect(() => {
-    renderCanvas();
-  }, [tagPositions, bounds, areaPoints, viewSettings]);
-
-  // Gestione ridimensionamento
-  useEffect(() => {
-    const handleResize = () => renderCanvas();
-
-    window.addEventListener("resize", handleResize);
-    return () => {
-      window.removeEventListener("resize", handleResize);
+  // Parser DXF migliorato con supporto per più entità e miglior rendering
+  const parseDxfToThree = (dxfContent, scene) => {
+    // Info di debug e conteggio
+    const result = {
+      entitiesCount: 0,
+      errors: [],
     };
-  }, []);
+
+    // Verifica se è un file DXF valido
+    if (!dxfContent || !dxfContent.includes("SECTION")) {
+      throw new Error("File DXF non valido o formato non riconosciuto");
+    }
+
+    // Estrai la sezione ENTITIES
+    let entitiesSection = "";
+    try {
+      const entitiesMatch = dxfContent.match(/ENTITIES([\s\S]*?)ENDSEC/);
+      if (entitiesMatch) {
+        entitiesSection = entitiesMatch[1];
+      } else {
+        result.errors.push("Sezione ENTITIES non trovata");
+        return result;
+      }
+    } catch (err) {
+      result.errors.push(
+        `Errore nell'estrazione della sezione ENTITIES: ${err.message}`
+      );
+      return result;
+    }
+
+    // Funzione helper per creare una linea
+    const createLine = (points, layer) => {
+      // Materiale per linee più spesse e più scure
+      const material = new THREE.LineBasicMaterial({
+        color: 0x000000, // Nero per planimetrie
+        linewidth: 1.5, // Più spesso per maggiore visibilità (nota: il valore effettivo dipende dal browser)
+      });
+
+      const geometry = new THREE.BufferGeometry().setFromPoints(points);
+      const line = new THREE.Line(geometry, material);
+      line.userData = { isDxf: true, layer };
+      scene.add(line);
+      result.entitiesCount++;
+      return line;
+    };
+
+    // Analizza le entità
+    try {
+      // LINES - Linee semplici
+      parseEntityType(entitiesSection, "LINE", (entityData) => {
+        try {
+          const x1 = getCoord(entityData, 10);
+          const y1 = getCoord(entityData, 20);
+          const z1 = getCoord(entityData, 30, 0);
+          const x2 = getCoord(entityData, 11);
+          const y2 = getCoord(entityData, 21);
+          const z2 = getCoord(entityData, 31, 0);
+          const layer = getLayerName(entityData);
+
+          const points = [
+            new THREE.Vector3(x1, y1, z1),
+            new THREE.Vector3(x2, y2, z2),
+          ];
+
+          createLine(points, layer);
+        } catch (err) {
+          console.log(`Errore nel parsing di LINE: ${err.message}`);
+        }
+      });
+
+      // CIRCLES - Cerchi
+      parseEntityType(entitiesSection, "CIRCLE", (entityData) => {
+        try {
+          const x = getCoord(entityData, 10);
+          const y = getCoord(entityData, 20);
+          const z = getCoord(entityData, 30, 0);
+          const radius = getCoord(entityData, 40);
+          const layer = getLayerName(entityData);
+
+          // Più segmenti per cerchi più lisci
+          const segments = Math.max(48, Math.floor(radius * 3));
+          const points = [];
+
+          for (let i = 0; i <= segments; i++) {
+            const theta = (i / segments) * Math.PI * 2;
+            points.push(
+              new THREE.Vector3(
+                x + radius * Math.cos(theta),
+                y + radius * Math.sin(theta),
+                z
+              )
+            );
+          }
+
+          createLine(points, layer);
+        } catch (err) {
+          console.log(`Errore nel parsing di CIRCLE: ${err.message}`);
+        }
+      });
+
+      // ARCS - Archi
+      parseEntityType(entitiesSection, "ARC", (entityData) => {
+        try {
+          const x = getCoord(entityData, 10);
+          const y = getCoord(entityData, 20);
+          const z = getCoord(entityData, 30, 0);
+          const radius = getCoord(entityData, 40);
+          const startAngle = getCoord(entityData, 50) * (Math.PI / 180);
+          const endAngle = getCoord(entityData, 51) * (Math.PI / 180);
+          const layer = getLayerName(entityData);
+
+          // Più segmenti per archi più lisci
+          const segments = Math.max(32, Math.floor(radius * 2));
+          const points = [];
+
+          const angle =
+            endAngle > startAngle
+              ? endAngle - startAngle
+              : Math.PI * 2 + endAngle - startAngle;
+
+          for (let i = 0; i <= segments; i++) {
+            const theta = startAngle + (i / segments) * angle;
+            points.push(
+              new THREE.Vector3(
+                x + radius * Math.cos(theta),
+                y + radius * Math.sin(theta),
+                z
+              )
+            );
+          }
+
+          createLine(points, layer);
+        } catch (err) {
+          console.log(`Errore nel parsing di ARC: ${err.message}`);
+        }
+      });
+
+      // POLYLINES
+      parseEntityType(entitiesSection, "POLYLINE", (entityData) => {
+        try {
+          const layer = getLayerName(entityData);
+          const vertices = [];
+          let currentVertex = entityData.indexOf("VERTEX");
+
+          while (currentVertex !== -1) {
+            const endVertex = entityData.indexOf("VERTEX", currentVertex + 1);
+            const vertexData =
+              endVertex !== -1
+                ? entityData.substring(currentVertex, endVertex)
+                : entityData.substring(currentVertex);
+
+            try {
+              const x = getCoord(vertexData, 10);
+              const y = getCoord(vertexData, 20);
+              const z = getCoord(vertexData, 30, 0);
+              vertices.push(new THREE.Vector3(x, y, z));
+            } catch (err) {
+              // Ignora errori nei vertici
+            }
+
+            currentVertex = endVertex;
+          }
+
+          if (vertices.length >= 2) {
+            createLine(vertices, layer);
+          }
+        } catch (err) {
+          console.log(`Errore nel parsing di POLYLINE: ${err.message}`);
+        }
+      });
+
+      // LWPOLYLINES
+      parseEntityType(entitiesSection, "LWPOLYLINE", (entityData) => {
+        try {
+          const layer = getLayerName(entityData);
+          const vertices = [];
+
+          // Trova tutte le coppie di coordinate
+          const coordPattern = /10\s+([-\d.]+)[\s\S]*?20\s+([-\d.]+)/g;
+          let coordMatch;
+
+          while ((coordMatch = coordPattern.exec(entityData)) !== null) {
+            const x = parseFloat(coordMatch[1]);
+            const y = parseFloat(coordMatch[2]);
+            vertices.push(new THREE.Vector3(x, y, 0));
+          }
+
+          if (vertices.length >= 2) {
+            // Verifica se è chiusa (flag 70 contiene un valore con bit 1 impostato)
+            const closedMatch = entityData.match(/70\s+(\d+)/);
+            const isClosed =
+              closedMatch && (parseInt(closedMatch[1]) & 1) !== 0;
+
+            if (isClosed && vertices.length > 1) {
+              vertices.push(vertices[0].clone());
+            }
+
+            createLine(vertices, layer);
+          }
+        } catch (err) {
+          console.log(`Errore nel parsing di LWPOLYLINE: ${err.message}`);
+        }
+      });
+
+      // INSERT (blocchi)
+      parseEntityType(entitiesSection, "INSERT", (entityData) => {
+        try {
+          const x = getCoord(entityData, 10, 0);
+          const y = getCoord(entityData, 20, 0);
+          const z = getCoord(entityData, 30, 0);
+          const layer = getLayerName(entityData);
+
+          // Crea un piccolo quadrato per rappresentare l'inserimento
+          const points = [
+            new THREE.Vector3(x - 0.2, y - 0.2, z),
+            new THREE.Vector3(x + 0.2, y - 0.2, z),
+            new THREE.Vector3(x + 0.2, y + 0.2, z),
+            new THREE.Vector3(x - 0.2, y + 0.2, z),
+            new THREE.Vector3(x - 0.2, y - 0.2, z),
+          ];
+
+          createLine(points, layer);
+        } catch (err) {
+          console.log(`Errore nel parsing di INSERT: ${err.message}`);
+        }
+      });
+    } catch (err) {
+      result.errors.push(`Errore generale nel parsing: ${err.message}`);
+    }
+
+    return result;
+  };
+
+  // Funzione helper per estrarre coordinate
+  const getCoord = (entityData, groupCode, defaultValue = null) => {
+    const match = entityData.match(new RegExp(`${groupCode}\\s+([-\\d.]+)`));
+    if (!match && defaultValue !== null) return defaultValue;
+    if (!match) throw new Error(`Gruppo ${groupCode} non trovato`);
+    return parseFloat(match[1]);
+  };
+
+  // Funzione helper per estrarre il nome del layer
+  const getLayerName = (entityData) => {
+    const match = entityData.match(/8\s+([^\s]+)/);
+    return match ? match[1] : "0";
+  };
+
+  // Funzione helper per analizzare le entità di un tipo specifico
+  const parseEntityType = (data, entityType, callback) => {
+    let startIdx = data.indexOf(entityType);
+
+    while (startIdx !== -1) {
+      // Cerca l'inizio della prossima entità o la fine della sezione
+      let endIdx = data.indexOf("\n 0", startIdx + entityType.length);
+      if (endIdx === -1) endIdx = data.length;
+
+      // Estrai i dati dell'entità
+      const entityData = data.substring(startIdx, endIdx);
+
+      // Processa l'entità
+      callback(entityData);
+
+      // Passa alla prossima entità
+      startIdx = data.indexOf(entityType, endIdx);
+    }
+  };
+
+  // Centra la vista sui contenuti
+  const centerView = () => {
+    if (!sceneRef.current || !cameraRef.current || !controlsRef.current) return;
+
+    // Calcola il bounding box di tutte le geometrie
+    const box = new THREE.Box3();
+
+    sceneRef.current.children.forEach((child) => {
+      if (child instanceof THREE.Line && child.userData.isDxf) {
+        box.expandByObject(child);
+      }
+    });
+
+    if (box.isEmpty()) {
+      console.warn("Impossibile centrare la vista: nessun oggetto trovato");
+      return;
+    }
+
+    // Calcola il centro e la dimensione del bounding box
+    const center = new THREE.Vector3();
+    box.getCenter(center);
+
+    const size = new THREE.Vector3();
+    box.getSize(size);
+
+    console.log("Limiti del disegno:", {
+      min: box.min,
+      max: box.max,
+      center,
+      size,
+    });
+
+    // Calcola la distanza per vedere tutto il contenuto
+    const maxDim = Math.max(size.x, size.y);
+    const fov = cameraRef.current.fov * (Math.PI / 180);
+    let distance = maxDim / (2 * Math.tan(fov / 2));
+
+    // Aggiungi un po' di spazio extra
+    distance *= 1.2;
+
+    // Posiziona la camera
+    cameraRef.current.position.set(center.x, center.y, distance);
+    cameraRef.current.lookAt(center);
+    cameraRef.current.updateProjectionMatrix();
+
+    // Aggiorna i controlli
+    controlsRef.current.target.set(center.x, center.y, 0);
+    controlsRef.current.update();
+  };
 
   // Controlli di zoom
   const zoomIn = () => {
-    setBounds((prev) => {
-      const centerX = (prev.minX + prev.maxX) / 2;
-      const centerY = (prev.minY + prev.maxY) / 2;
-      const width = (prev.maxX - prev.minX) * 0.8;
-      const height = (prev.maxY - prev.minY) * 0.8;
+    if (!cameraRef.current) return;
 
-      return {
-        minX: centerX - width / 2,
-        minY: centerY - height / 2,
-        maxX: centerX + width / 2,
-        maxY: centerY + height / 2,
-      };
-    });
+    cameraRef.current.position.z *= 0.8;
+
+    if (controlsRef.current) {
+      controlsRef.current.update();
+    }
   };
 
   const zoomOut = () => {
-    setBounds((prev) => {
-      const centerX = (prev.minX + prev.maxX) / 2;
-      const centerY = (prev.minY + prev.maxY) / 2;
-      const width = (prev.maxX - prev.minX) * 1.25;
-      const height = (prev.maxY - prev.minY) * 1.25;
+    if (!cameraRef.current) return;
 
-      return {
-        minX: centerX - width / 2,
-        minY: centerY - height / 2,
-        maxX: centerX + width / 2,
-        maxY: centerY + height / 2,
-      };
-    });
+    cameraRef.current.position.z *= 1.2;
+
+    if (controlsRef.current) {
+      controlsRef.current.update();
+    }
   };
 
   const zoomReset = () => {
-    // Resetta allo zoom iniziale
-    const { minX, minY, maxX, maxY } = bounds;
-    const dxfWidth = maxX - minX;
-    const dxfHeight = maxY - minY;
+    centerView();
+  };
 
-    setBounds({
-      minX: minX - dxfWidth * 0.1,
-      minY: minY - dxfHeight * 0.1,
-      maxX: maxX + dxfWidth * 0.1,
-      maxY: maxY + dxfHeight * 0.1,
-    });
+  // Stili per il container
+  const containerStyle = {
+    width,
+    height,
+    position: "relative",
+    border: "1px solid #e0e0e0",
+    borderRadius: "4px",
+    overflow: "hidden",
   };
 
   if (error) {
@@ -622,19 +520,7 @@ export function DxfViewer({
   }
 
   return (
-    <div style={{ width, height, position: "relative" }}>
-      <canvas
-        ref={canvasRef}
-        width="100%"
-        height="100%"
-        className="border rounded w-full h-full"
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
-        onWheel={handleWheel}
-      />
-
+    <div style={containerStyle} ref={containerRef}>
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-70 z-10">
           <div className="text-blue-600 flex items-center">
@@ -666,20 +552,13 @@ export function DxfViewer({
       {!data && (
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="text-gray-500">
-            Carica un file DXF per visualizzare la mappa
+            Carica un file DXF per visualizzare la planimetria
           </div>
         </div>
       )}
 
-      {isAreaMode && (
-        <div className="absolute top-2 left-2 bg-red-100 text-red-700 px-3 py-1 rounded-md text-sm">
-          Modalità definizione area: Clicca per aggiungere punti, doppio clic
-          per completare
-        </div>
-      )}
-
-      {/* Controlli */}
-      <div className="absolute bottom-2 right-2 bg-white rounded-md shadow-md p-2 z-10 flex space-x-2">
+      {/* Controlli di zoom */}
+      <div className="absolute bottom-2 right-2 bg-white rounded-md shadow-md p-2 z-20 flex space-x-2">
         <button
           onClick={zoomIn}
           className="bg-gray-200 hover:bg-gray-300 p-1 rounded"
@@ -719,7 +598,7 @@ export function DxfViewer({
         <button
           onClick={zoomReset}
           className="bg-gray-200 hover:bg-gray-300 p-1 rounded"
-          title="Zoom Reset"
+          title="Centra Planimetria"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
