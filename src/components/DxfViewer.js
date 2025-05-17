@@ -3,16 +3,13 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import DxfParser from "dxf-parser";
 
-/**
- * DxfViewer - Versione finale con marker semplici ma molto visibili
- * e correzione messaggi condizionali
- */
 export function DxfViewer({
   data,
   width = "100%",
   height = "400px",
   tagPositions = {},
   showTagsMessage = true,
+  anchors = [], // Predisposizione per le ancore BlueIOT
 }) {
   const containerRef = useRef(null);
   const rendererRef = useRef(null);
@@ -26,14 +23,17 @@ export function DxfViewer({
   // Gruppo per i tag
   const tagsRef = useRef(null);
 
+  // Gruppo per le ancore
+  const anchorsRef = useRef(null);
+
+  // Rettangolo di delimitazione della mappa
+  const mapBoundsRef = useRef({
+    min: { x: 0, y: 0 },
+    max: { x: 100, y: 100 },
+  });
+
   // Mappa per tenere traccia dei marker dei tag
   const tagMarkersRef = useRef({});
-
-  // Riferimento per debugging
-  const debugInfoRef = useRef({
-    lastUpdate: 0,
-    tagCount: 0,
-  });
 
   // Inizializza il renderer Three.js
   useEffect(() => {
@@ -56,6 +56,11 @@ export function DxfViewer({
       const tagsGroup = new THREE.Group();
       scene.add(tagsGroup);
       tagsRef.current = tagsGroup;
+
+      // Crea un gruppo per le ancore
+      const anchorsGroup = new THREE.Group();
+      scene.add(anchorsGroup);
+      anchorsRef.current = anchorsGroup;
 
       // Inizializza la camera
       const camera = new THREE.PerspectiveCamera(
@@ -161,6 +166,44 @@ export function DxfViewer({
     }
   }, []);
 
+  // Funzione per limitare le coordinate all'interno del rettangolo della mappa con margine
+  const constrainToMapBounds = (x, y) => {
+    const bounds = mapBoundsRef.current;
+
+    // Calcola le dimensioni della mappa
+    const mapWidth = bounds.max.x - bounds.min.x;
+    const mapHeight = bounds.max.y - bounds.min.y;
+
+    // Applica un margine del 5% dai bordi
+    const marginX = mapWidth * 0.05;
+    const marginY = mapHeight * 0.05;
+
+    // Limita le coordinate all'interno del rettangolo con margine
+    const constrained = {
+      x: Math.max(bounds.min.x + marginX, Math.min(bounds.max.x - marginX, x)),
+      y: Math.max(bounds.min.y + marginY, Math.min(bounds.max.y - marginY, y)),
+    };
+
+    // Se le coordinate originali sono molto lontane, spostale verso il centro
+    const centerX = (bounds.max.x + bounds.min.x) / 2;
+    const centerY = (bounds.max.y + bounds.min.y) / 2;
+
+    // Se il punto è completamente fuori dalla mappa, avvicinalo al centro
+    if (
+      x < bounds.min.x ||
+      x > bounds.max.x ||
+      y < bounds.min.y ||
+      y > bounds.max.y
+    ) {
+      // Sposta verso il centro, ma mantieni una certa casualità
+      const randomOffset = Math.random() * 0.4 + 0.3; // Tra 0.3 e 0.7
+      constrained.x = centerX + (constrained.x - centerX) * randomOffset;
+      constrained.y = centerY + (constrained.y - centerY) * randomOffset;
+    }
+
+    return constrained;
+  };
+
   // Aggiorna i tag sulla mappa quando le posizioni cambiano
   useEffect(() => {
     if (!tagsRef.current || !sceneRef.current) {
@@ -170,21 +213,6 @@ export function DxfViewer({
 
     const tagCount = Object.keys(tagPositions).length;
     console.log(`Aggiornamento ${tagCount} tag sulla mappa`);
-
-    // Aggiorna info di debug
-    debugInfoRef.current.lastUpdate = Date.now();
-    debugInfoRef.current.tagCount = tagCount;
-
-    // Debugging info per i primi tag
-    if (tagCount > 0) {
-      const firstTagId = Object.keys(tagPositions)[0];
-      const firstTag = tagPositions[firstTagId];
-      console.log(
-        `Esempio tag: ID=${firstTagId}, pos=(${firstTag.x}, ${
-          firstTag.y
-        }), type=${firstTag.type || "unknown"}`
-      );
-    }
 
     // Rimuovi i marker non più presenti
     Object.keys(tagMarkersRef.current).forEach((tagId) => {
@@ -209,27 +237,40 @@ export function DxfViewer({
     // Aggiorna o crea nuovi marker
     Object.entries(tagPositions).forEach(([tagId, info]) => {
       try {
+        // Limita le coordinate all'interno del rettangolo della mappa
+        const constrained = constrainToMapBounds(info.x, info.y);
+
         // Usa colori diversi in base al tipo (dipendente o asset)
         const color = info.type === "employee" ? 0x3b82f6 : 0x10b981;
 
         // Se il marker esiste già, aggiorna solo la posizione
         if (tagMarkersRef.current[tagId]) {
           const marker = tagMarkersRef.current[tagId];
-          marker.position.set(info.x, info.y, 5); // Posiziona leggermente sopra per visibilità
+          // Posiziona il marker e assicurati che sia visibile sopra la mappa
+          marker.position.set(constrained.x, constrained.y, 10); // Aumentato l'asse Z per maggiore sicurezza
           return;
         }
 
+        // MARKER PIÙ GRANDI E VISIBILI
+        const markerSize = 5; // Dimensione aumentata
+
         // Crea un nuovo marker usando forme 3D semplici invece di texture
-        // Prima il corpo principale del marker
-        const markerGeometry = new THREE.CylinderGeometry(2, 2, 1, 16);
+        const markerGeometry = new THREE.CylinderGeometry(
+          markerSize,
+          markerSize,
+          1,
+          16
+        );
         const markerMaterial = new THREE.MeshBasicMaterial({ color: color });
         const marker = new THREE.Mesh(markerGeometry, markerMaterial);
-        marker.position.set(info.x, info.y, 5);
+
+        // Posiziona il marker e assicurati che sia visibile sopra la mappa
+        marker.position.set(constrained.x, constrained.y, 10); // Posizionato più in alto per visibilità
         marker.rotation.x = Math.PI / 2; // Ruota per farlo stare piatto sulla mappa
         marker.userData = { tagId, name: info.name };
 
-        // Aggiungi un bordo bianco (anello)
-        const ringGeometry = new THREE.TorusGeometry(2.2, 0.4, 8, 24);
+        // Aggiungi un bordo bianco più spesso per maggiore visibilità
+        const ringGeometry = new THREE.TorusGeometry(markerSize + 1, 1, 8, 24);
         const ringMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
         const ring = new THREE.Mesh(ringGeometry, ringMaterial);
         ring.rotation.x = Math.PI / 2; // Ruota come il marker principale
@@ -239,7 +280,9 @@ export function DxfViewer({
         tagsRef.current.add(marker);
         tagMarkersRef.current[tagId] = marker;
 
-        console.log(`Creato marker per tag ${tagId} a (${info.x}, ${info.y})`);
+        console.log(
+          `Creato marker per tag ${tagId} a (${constrained.x}, ${constrained.y})`
+        );
       } catch (err) {
         console.error(`Errore creazione marker per tag ${tagId}:`, err);
       }
@@ -274,6 +317,12 @@ export function DxfViewer({
         }
       });
 
+      // Reimposta il rettangolo di delimitazione
+      const boundingBox = new THREE.Box3(
+        new THREE.Vector3(Infinity, Infinity, Infinity),
+        new THREE.Vector3(-Infinity, -Infinity, -Infinity)
+      );
+
       // Parse del DXF usando la libreria dxf-parser
       const parser = new DxfParser();
       let dxf;
@@ -290,6 +339,11 @@ export function DxfViewer({
 
         if (result.entitiesCount > 0) {
           // Il parsing manuale ha funzionato
+          // Usa il bounding box dal risultato del parsing manuale
+          if (result.boundingBox) {
+            boundingBox.copy(result.boundingBox);
+          }
+          updateMapBounds(boundingBox);
           centerView();
           setLoading(false);
           return;
@@ -345,6 +399,21 @@ export function DxfViewer({
               const line = new THREE.Line(geometry, material);
               line.userData = { isDxf: true, layer: entity.layer };
               group.add(line);
+
+              // Aggiorna il bounding box
+              const point1 = new THREE.Vector3(
+                entity.vertices[0].x,
+                entity.vertices[0].y,
+                entity.vertices[0].z || 0
+              );
+              const point2 = new THREE.Vector3(
+                entity.vertices[1].x,
+                entity.vertices[1].y,
+                entity.vertices[1].z || 0
+              );
+              boundingBox.expandByPoint(point1);
+              boundingBox.expandByPoint(point2);
+
               entitiesCount++;
               break;
             }
@@ -358,6 +427,10 @@ export function DxfViewer({
 
               entity.vertices.forEach((vertex) => {
                 vertices.push(vertex.x, vertex.y, vertex.z || 0);
+                // Aggiorna il bounding box
+                boundingBox.expandByPoint(
+                  new THREE.Vector3(vertex.x, vertex.y, vertex.z || 0)
+                );
               });
 
               // Chiudi il poligono se necessario
@@ -388,11 +461,14 @@ export function DxfViewer({
 
               for (let i = 0; i <= segments; i++) {
                 const theta = (i / segments) * Math.PI * 2;
-                vertices.push(
-                  entity.center.x + entity.radius * Math.cos(theta),
-                  entity.center.y + entity.radius * Math.sin(theta),
-                  entity.center.z || 0
-                );
+                const x = entity.center.x + entity.radius * Math.cos(theta);
+                const y = entity.center.y + entity.radius * Math.sin(theta);
+                const z = entity.center.z || 0;
+
+                vertices.push(x, y, z);
+
+                // Aggiorna il bounding box
+                boundingBox.expandByPoint(new THREE.Vector3(x, y, z));
               }
 
               geometry.setAttribute(
@@ -421,11 +497,14 @@ export function DxfViewer({
 
               for (let i = 0; i <= segments; i++) {
                 const theta = startAngle + (i / segments) * angleDiff;
-                vertices.push(
-                  entity.center.x + entity.radius * Math.cos(theta),
-                  entity.center.y + entity.radius * Math.sin(theta),
-                  entity.center.z || 0
-                );
+                const x = entity.center.x + entity.radius * Math.cos(theta);
+                const y = entity.center.y + entity.radius * Math.sin(theta);
+                const z = entity.center.z || 0;
+
+                vertices.push(x, y, z);
+
+                // Aggiorna il bounding box
+                boundingBox.expandByPoint(new THREE.Vector3(x, y, z));
               }
 
               geometry.setAttribute(
@@ -449,6 +528,12 @@ export function DxfViewer({
         sceneRef.current.add(group);
         console.log(`Caricate ${entitiesCount} entità dalla mappa DXF`);
 
+        // Aggiorna i confini della mappa
+        updateMapBounds(boundingBox);
+
+        // Visualizza il contorno della mappa (rettangolo di delimitazione)
+        visualizeMapBounds();
+
         // Centra la vista
         centerView();
       } else {
@@ -463,11 +548,108 @@ export function DxfViewer({
     }
   }, [data]);
 
+  // Funzione per aggiornare i confini della mappa
+  const updateMapBounds = (boundingBox) => {
+    if (boundingBox.isEmpty()) {
+      console.warn("Bounding box vuoto, uso valori predefiniti");
+      mapBoundsRef.current = {
+        min: { x: 0, y: 0 },
+        max: { x: 100, y: 100 },
+      };
+    } else {
+      // Aggiorna i confini della mappa
+      mapBoundsRef.current = {
+        min: { x: boundingBox.min.x, y: boundingBox.min.y },
+        max: { x: boundingBox.max.x, y: boundingBox.max.y },
+      };
+
+      // Debug: stampa i confini calcolati
+      console.log("Confini mappa aggiornati:", mapBoundsRef.current);
+
+      // Controlla anche i marker esistenti e spostali se necessario
+      Object.entries(tagMarkersRef.current).forEach(([tagId, marker]) => {
+        const currentPos = marker.position;
+        const constrained = constrainToMapBounds(currentPos.x, currentPos.y);
+
+        if (currentPos.x !== constrained.x || currentPos.y !== constrained.y) {
+          marker.position.set(constrained.x, constrained.y, currentPos.z);
+        }
+      });
+    }
+  };
+
+  // Visualizza il contorno della mappa (rettangolo di delimitazione)
+  const visualizeMapBounds = () => {
+    if (!sceneRef.current) return;
+
+    // Recupera i confini
+    const bounds = mapBoundsRef.current;
+
+    // Rimuovi eventuali contorni esistenti
+    sceneRef.current.traverse((object) => {
+      if (object.userData && object.userData.isMapBounds) {
+        sceneRef.current.remove(object);
+      }
+    });
+
+    // Crea un rettangolo che rappresenta i confini della mappa
+    const geometry = new THREE.BufferGeometry();
+    const vertices = [
+      // Rettangolo
+      bounds.min.x,
+      bounds.min.y,
+      1, // z=1 per essere sopra la mappa ma sotto i marker
+      bounds.max.x,
+      bounds.min.y,
+      1,
+      bounds.max.x,
+      bounds.max.y,
+      1,
+      bounds.min.x,
+      bounds.max.y,
+      1,
+      bounds.min.x,
+      bounds.min.y,
+      1, // Chiudi il rettangolo
+    ];
+
+    geometry.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(vertices, 3)
+    );
+
+    // Materiale per il contorno (rosso semitrasparente)
+    const material = new THREE.LineBasicMaterial({
+      color: 0xff0000,
+      opacity: 0.6,
+      transparent: true,
+      linewidth: 2,
+    });
+
+    const boundaryLine = new THREE.Line(geometry, material);
+    boundaryLine.userData = { isMapBounds: true };
+    sceneRef.current.add(boundaryLine);
+
+    // Opzionale: Aggiungi un indicatore per l'origine (punto in basso a sinistra)
+    const originGeometry = new THREE.SphereGeometry(2, 16, 16);
+    const originMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+    const originMarker = new THREE.Mesh(originGeometry, originMaterial);
+    originMarker.position.set(bounds.min.x, bounds.min.y, 1);
+    originMarker.userData = { isMapBounds: true, isOrigin: true };
+    sceneRef.current.add(originMarker);
+
+    console.log("Visualizzazione contorno mappa creata");
+  };
+
   // Parser manuale semplificato per DXF (fallback)
   const parseSimpleDxf = (dxfContent, scene) => {
     const result = {
       entitiesCount: 0,
       errors: [],
+      boundingBox: new THREE.Box3(
+        new THREE.Vector3(Infinity, Infinity, Infinity),
+        new THREE.Vector3(-Infinity, -Infinity, -Infinity)
+      ),
     };
 
     // Verifica se è un file DXF valido
@@ -522,6 +704,10 @@ export function DxfViewer({
         const line = new THREE.Line(geometry, material);
         line.userData = { isDxf: true };
         group.add(line);
+
+        // Aggiorna il bounding box
+        points.forEach((point) => result.boundingBox.expandByPoint(point));
+
         result.entitiesCount++;
         return line;
       };
@@ -610,13 +796,12 @@ export function DxfViewer({
     }
   };
 
-  // Centra la vista sui contenuti
+  // Centra la vista sui contenuti - MIGLIORATO per garantire visibilità
   const centerView = () => {
     if (!sceneRef.current || !cameraRef.current || !controlsRef.current) return;
 
-    // Calcola il bounding box di tutte le geometrie DXF
+    // Usa il bounding box appena calcolato
     const box = new THREE.Box3();
-
     sceneRef.current.traverse((child) => {
       if (child.userData && child.userData.isDxf) {
         box.expandByObject(child);
@@ -646,7 +831,7 @@ export function DxfViewer({
     let distance = maxDim / (2 * Math.tan(fov / 2));
 
     // Aggiungi un po' di spazio extra
-    distance *= 1.2;
+    distance *= 1.3;
 
     // Posiziona la camera
     cameraRef.current.position.set(center.x, center.y, distance);
@@ -656,6 +841,12 @@ export function DxfViewer({
     // Aggiorna i controlli
     controlsRef.current.target.set(center.x, center.y, 0);
     controlsRef.current.update();
+
+    console.log("Vista centrata con successo:", {
+      center: center,
+      size: size,
+      distance: distance,
+    });
   };
 
   // Controlli di zoom
@@ -796,6 +987,12 @@ export function DxfViewer({
           In attesa di tag attivi...
         </div>
       )}
+
+      {/* Info coordinate in basso a sinistra */}
+      <div className="absolute bottom-2 left-2 bg-white bg-opacity-90 rounded-md shadow-md px-3 py-1 z-20 text-xs text-gray-600">
+        Origine: ({Math.round(mapBoundsRef.current.min.x)},{" "}
+        {Math.round(mapBoundsRef.current.min.y)})
+      </div>
     </div>
   );
 }
