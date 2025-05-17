@@ -1,27 +1,47 @@
 import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
+import DxfParser from "dxf-parser";
 
 /**
- * Componente DxfViewer con qualità migliorata
- * Ottimizzato per una visualizzazione chiara delle planimetrie
+ * DxfViewer - Versione finale con marker semplici ma molto visibili
+ * e correzione messaggi condizionali
  */
-export function DxfViewer({ data, width = "100%", height = "400px" }) {
+export function DxfViewer({
+  data,
+  width = "100%",
+  height = "400px",
+  tagPositions = {},
+  showTagsMessage = true,
+}) {
   const containerRef = useRef(null);
   const rendererRef = useRef(null);
   const sceneRef = useRef(null);
   const cameraRef = useRef(null);
   const controlsRef = useRef(null);
+  const animationFrameRef = useRef(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const animationFrameRef = useRef(null);
 
-  // Inizializza il renderer Three.js con alta qualità
+  // Gruppo per i tag
+  const tagsRef = useRef(null);
+
+  // Mappa per tenere traccia dei marker dei tag
+  const tagMarkersRef = useRef({});
+
+  // Riferimento per debugging
+  const debugInfoRef = useRef({
+    lastUpdate: 0,
+    tagCount: 0,
+  });
+
+  // Inizializza il renderer Three.js
   useEffect(() => {
     if (!containerRef.current) return;
 
     try {
       setLoading(true);
+      console.log("Inizializzazione DxfViewer");
 
       // Ottieni le dimensioni del container
       const width = containerRef.current.clientWidth;
@@ -29,8 +49,13 @@ export function DxfViewer({ data, width = "100%", height = "400px" }) {
 
       // Inizializza la scena Three.js
       const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0xffffff); // Sfondo bianco per maggiore chiarezza
+      scene.background = new THREE.Color(0xf8f9fa);
       sceneRef.current = scene;
+
+      // Crea un gruppo per i tag e aggiungilo alla scena
+      const tagsGroup = new THREE.Group();
+      scene.add(tagsGroup);
+      tagsRef.current = tagsGroup;
 
       // Inizializza la camera
       const camera = new THREE.PerspectiveCamera(
@@ -49,7 +74,6 @@ export function DxfViewer({ data, width = "100%", height = "400px" }) {
         preserveDrawingBuffer: true,
       });
       renderer.setSize(width, height);
-      // Usa un pixel ratio più alto per maggiore nitidezza
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       containerRef.current.appendChild(renderer.domElement);
       rendererRef.current = renderer;
@@ -66,14 +90,16 @@ export function DxfViewer({ data, width = "100%", height = "400px" }) {
       controlsRef.current = controls;
 
       // Aggiungi luci
-      const ambientLight = new THREE.AmbientLight(0xffffff, 1.0); // Luce piena per planimetrie
+      const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
       scene.add(ambientLight);
 
       // Funzione di animazione
       const animate = () => {
         animationFrameRef.current = requestAnimationFrame(animate);
-        controls.update();
-        renderer.render(scene, camera);
+        if (controlsRef.current) controlsRef.current.update();
+        if (rendererRef.current && sceneRef.current && cameraRef.current) {
+          rendererRef.current.render(sceneRef.current, cameraRef.current);
+        }
       };
 
       animate();
@@ -95,22 +121,36 @@ export function DxfViewer({ data, width = "100%", height = "400px" }) {
       window.addEventListener("resize", handleResize);
 
       setLoading(false);
+      console.log("DxfViewer inizializzato con successo");
 
       // Cleanup
       return () => {
+        console.log("Cleanup DxfViewer");
         window.removeEventListener("resize", handleResize);
 
         if (animationFrameRef.current) {
           cancelAnimationFrame(animationFrameRef.current);
         }
 
-        if (rendererRef.current) {
-          containerRef.current?.removeChild(rendererRef.current.domElement);
+        if (rendererRef.current && containerRef.current) {
+          if (containerRef.current.contains(rendererRef.current.domElement)) {
+            containerRef.current.removeChild(rendererRef.current.domElement);
+          }
           rendererRef.current.dispose();
         }
 
         // Pulisci la scena
         if (sceneRef.current) {
+          sceneRef.current.traverse((object) => {
+            if (object.geometry) object.geometry.dispose();
+            if (object.material) {
+              if (Array.isArray(object.material)) {
+                object.material.forEach((material) => material.dispose());
+              } else {
+                object.material.dispose();
+              }
+            }
+          });
           sceneRef.current.clear();
         }
       };
@@ -121,91 +161,371 @@ export function DxfViewer({ data, width = "100%", height = "400px" }) {
     }
   }, []);
 
+  // Aggiorna i tag sulla mappa quando le posizioni cambiano
+  useEffect(() => {
+    if (!tagsRef.current || !sceneRef.current) {
+      console.warn("tagsRef o sceneRef non disponibili per aggiornamento tag");
+      return;
+    }
+
+    const tagCount = Object.keys(tagPositions).length;
+    console.log(`Aggiornamento ${tagCount} tag sulla mappa`);
+
+    // Aggiorna info di debug
+    debugInfoRef.current.lastUpdate = Date.now();
+    debugInfoRef.current.tagCount = tagCount;
+
+    // Debugging info per i primi tag
+    if (tagCount > 0) {
+      const firstTagId = Object.keys(tagPositions)[0];
+      const firstTag = tagPositions[firstTagId];
+      console.log(
+        `Esempio tag: ID=${firstTagId}, pos=(${firstTag.x}, ${
+          firstTag.y
+        }), type=${firstTag.type || "unknown"}`
+      );
+    }
+
+    // Rimuovi i marker non più presenti
+    Object.keys(tagMarkersRef.current).forEach((tagId) => {
+      if (!tagPositions[tagId]) {
+        console.log(`Rimozione marker per tag ${tagId}`);
+        const marker = tagMarkersRef.current[tagId];
+        if (marker && tagsRef.current) {
+          tagsRef.current.remove(marker);
+          if (marker.geometry) marker.geometry.dispose();
+          if (marker.material) {
+            if (Array.isArray(marker.material)) {
+              marker.material.forEach((m) => m.dispose());
+            } else {
+              marker.material.dispose();
+            }
+          }
+          delete tagMarkersRef.current[tagId];
+        }
+      }
+    });
+
+    // Aggiorna o crea nuovi marker
+    Object.entries(tagPositions).forEach(([tagId, info]) => {
+      try {
+        // Usa colori diversi in base al tipo (dipendente o asset)
+        const color = info.type === "employee" ? 0x3b82f6 : 0x10b981;
+
+        // Se il marker esiste già, aggiorna solo la posizione
+        if (tagMarkersRef.current[tagId]) {
+          const marker = tagMarkersRef.current[tagId];
+          marker.position.set(info.x, info.y, 5); // Posiziona leggermente sopra per visibilità
+          return;
+        }
+
+        // Crea un nuovo marker usando forme 3D semplici invece di texture
+        // Prima il corpo principale del marker
+        const markerGeometry = new THREE.CylinderGeometry(2, 2, 1, 16);
+        const markerMaterial = new THREE.MeshBasicMaterial({ color: color });
+        const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+        marker.position.set(info.x, info.y, 5);
+        marker.rotation.x = Math.PI / 2; // Ruota per farlo stare piatto sulla mappa
+        marker.userData = { tagId, name: info.name };
+
+        // Aggiungi un bordo bianco (anello)
+        const ringGeometry = new THREE.TorusGeometry(2.2, 0.4, 8, 24);
+        const ringMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+        ring.rotation.x = Math.PI / 2; // Ruota come il marker principale
+        marker.add(ring);
+
+        // Aggiungi il marker alla scena e tieni traccia di esso
+        tagsRef.current.add(marker);
+        tagMarkersRef.current[tagId] = marker;
+
+        console.log(`Creato marker per tag ${tagId} a (${info.x}, ${info.y})`);
+      } catch (err) {
+        console.error(`Errore creazione marker per tag ${tagId}:`, err);
+      }
+    });
+  }, [tagPositions]);
+
   // Carica e visualizza i dati DXF
   useEffect(() => {
     if (!sceneRef.current || !data) return;
 
     setLoading(true);
+    console.log("Inizio parsing DXF...");
 
     try {
-      console.log("Inizio parsing DXF...");
-
       // Rimuovi geometrie DXF precedenti
-      sceneRef.current.children = sceneRef.current.children.filter(
-        (child) => !(child instanceof THREE.Line && child.userData.isDxf)
-      );
+      const entitiesToRemove = [];
+      sceneRef.current.traverse((object) => {
+        if (object.userData && object.userData.isDxf) {
+          entitiesToRemove.push(object);
+        }
+      });
 
-      // Parser DXF
-      const result = parseDxfToThree(data, sceneRef.current);
+      entitiesToRemove.forEach((object) => {
+        sceneRef.current.remove(object);
+        if (object.geometry) object.geometry.dispose();
+        if (object.material) {
+          if (Array.isArray(object.material)) {
+            object.material.forEach((material) => material.dispose());
+          } else {
+            object.material.dispose();
+          }
+        }
+      });
 
-      if (result.entitiesCount > 0) {
-        // Centra la vista sui contenuti
-        centerView();
-        console.log(
-          "Parsing DXF completato con successo:",
-          result.entitiesCount,
-          "entità"
+      // Parse del DXF usando la libreria dxf-parser
+      const parser = new DxfParser();
+      let dxf;
+
+      try {
+        dxf = parser.parseSync(data);
+      } catch (err) {
+        console.error(
+          "Errore nel parsing DXF standard, tentativo con parsing manuale",
+          err
         );
+        // Se il parser standard fallisce, utilizziamo il nostro parser manuale
+        const result = parseSimpleDxf(data, sceneRef.current);
+
+        if (result.entitiesCount > 0) {
+          // Il parsing manuale ha funzionato
+          centerView();
+          setLoading(false);
+          return;
+        } else {
+          throw new Error("Impossibile interpretare il file DXF");
+        }
+      }
+
+      // Se arriviamo qui, il parsing con dxf-parser è riuscito
+      console.log("DXF Parsed:", dxf);
+
+      if (!dxf.entities || dxf.entities.length === 0) {
+        throw new Error("Nessuna entità trovata nel file DXF");
+      }
+
+      // Crea oggetti Three.js per ogni entità
+      const group = new THREE.Group();
+      group.userData = { isDxf: true };
+
+      // Colore predefinito per le linee
+      const defaultColor = 0x333333;
+
+      // Materiale di base per le linee
+      const createLineMaterial = (colorCode) => {
+        const color = colorCode !== undefined ? colorCode : defaultColor;
+        return new THREE.LineBasicMaterial({
+          color: color,
+          linewidth: 1.5,
+        });
+      };
+
+      // Processa le entità
+      let entitiesCount = 0;
+
+      dxf.entities.forEach((entity) => {
+        try {
+          switch (entity.type) {
+            case "LINE": {
+              const geometry = new THREE.BufferGeometry();
+              const vertices = [
+                entity.vertices[0].x,
+                entity.vertices[0].y,
+                entity.vertices[0].z || 0,
+                entity.vertices[1].x,
+                entity.vertices[1].y,
+                entity.vertices[1].z || 0,
+              ];
+              geometry.setAttribute(
+                "position",
+                new THREE.Float32BufferAttribute(vertices, 3)
+              );
+              const material = createLineMaterial(entity.color);
+              const line = new THREE.Line(geometry, material);
+              line.userData = { isDxf: true, layer: entity.layer };
+              group.add(line);
+              entitiesCount++;
+              break;
+            }
+
+            case "LWPOLYLINE":
+            case "POLYLINE": {
+              if (entity.vertices.length < 2) break;
+
+              const geometry = new THREE.BufferGeometry();
+              const vertices = [];
+
+              entity.vertices.forEach((vertex) => {
+                vertices.push(vertex.x, vertex.y, vertex.z || 0);
+              });
+
+              // Chiudi il poligono se necessario
+              if (entity.closed && entity.vertices.length > 2) {
+                vertices.push(
+                  entity.vertices[0].x,
+                  entity.vertices[0].y,
+                  entity.vertices[0].z || 0
+                );
+              }
+
+              geometry.setAttribute(
+                "position",
+                new THREE.Float32BufferAttribute(vertices, 3)
+              );
+              const material = createLineMaterial(entity.color);
+              const polyline = new THREE.Line(geometry, material);
+              polyline.userData = { isDxf: true, layer: entity.layer };
+              group.add(polyline);
+              entitiesCount++;
+              break;
+            }
+
+            case "CIRCLE": {
+              const segments = Math.max(32, Math.floor(entity.radius * 4));
+              const geometry = new THREE.BufferGeometry();
+              const vertices = [];
+
+              for (let i = 0; i <= segments; i++) {
+                const theta = (i / segments) * Math.PI * 2;
+                vertices.push(
+                  entity.center.x + entity.radius * Math.cos(theta),
+                  entity.center.y + entity.radius * Math.sin(theta),
+                  entity.center.z || 0
+                );
+              }
+
+              geometry.setAttribute(
+                "position",
+                new THREE.Float32BufferAttribute(vertices, 3)
+              );
+              const material = createLineMaterial(entity.color);
+              const circle = new THREE.Line(geometry, material);
+              circle.userData = { isDxf: true, layer: entity.layer };
+              group.add(circle);
+              entitiesCount++;
+              break;
+            }
+
+            case "ARC": {
+              const segments = Math.max(32, Math.floor(entity.radius * 3));
+              const geometry = new THREE.BufferGeometry();
+              const vertices = [];
+
+              const startAngle = entity.startAngle;
+              const endAngle = entity.endAngle;
+              const angleDiff =
+                endAngle > startAngle
+                  ? endAngle - startAngle
+                  : Math.PI * 2 + endAngle - startAngle;
+
+              for (let i = 0; i <= segments; i++) {
+                const theta = startAngle + (i / segments) * angleDiff;
+                vertices.push(
+                  entity.center.x + entity.radius * Math.cos(theta),
+                  entity.center.y + entity.radius * Math.sin(theta),
+                  entity.center.z || 0
+                );
+              }
+
+              geometry.setAttribute(
+                "position",
+                new THREE.Float32BufferAttribute(vertices, 3)
+              );
+              const material = createLineMaterial(entity.color);
+              const arc = new THREE.Line(geometry, material);
+              arc.userData = { isDxf: true, layer: entity.layer };
+              group.add(arc);
+              entitiesCount++;
+              break;
+            }
+          }
+        } catch (err) {
+          console.warn(`Errore nel processare l'entità ${entity.type}:`, err);
+        }
+      });
+
+      if (entitiesCount > 0) {
+        sceneRef.current.add(group);
+        console.log(`Caricate ${entitiesCount} entità dalla mappa DXF`);
+
+        // Centra la vista
+        centerView();
       } else {
-        console.warn("Nessuna entità DXF trovata da visualizzare");
+        setError("Nessuna entità visualizzabile nel file DXF");
       }
 
       setLoading(false);
     } catch (err) {
-      console.error("Errore durante il caricamento del DXF:", err);
-      setError(`Errore durante il parsing DXF: ${err.message}`);
+      console.error("Errore durante l'elaborazione del DXF:", err);
+      setError(`Errore durante l'elaborazione del DXF: ${err.message}`);
       setLoading(false);
     }
   }, [data]);
 
-  // Parser DXF migliorato con supporto per più entità e miglior rendering
-  const parseDxfToThree = (dxfContent, scene) => {
-    // Info di debug e conteggio
+  // Parser manuale semplificato per DXF (fallback)
+  const parseSimpleDxf = (dxfContent, scene) => {
     const result = {
       entitiesCount: 0,
       errors: [],
     };
 
     // Verifica se è un file DXF valido
-    if (!dxfContent || !dxfContent.includes("SECTION")) {
+    if (
+      !dxfContent ||
+      (!dxfContent.includes("SECTION") && !dxfContent.includes("ENTITIES"))
+    ) {
       throw new Error("File DXF non valido o formato non riconosciuto");
     }
 
-    // Estrai la sezione ENTITIES
-    let entitiesSection = "";
     try {
+      // Estrai la sezione ENTITIES
+      let entitiesSection = "";
       const entitiesMatch = dxfContent.match(/ENTITIES([\s\S]*?)ENDSEC/);
+
       if (entitiesMatch) {
         entitiesSection = entitiesMatch[1];
       } else {
-        result.errors.push("Sezione ENTITIES non trovata");
-        return result;
+        // Prova un approccio più semplice
+        const lines = dxfContent.split("\n");
+        let inEntitiesSection = false;
+
+        for (const line of lines) {
+          const trimmedLine = line.trim();
+
+          if (inEntitiesSection) {
+            if (trimmedLine === "ENDSEC") break;
+            entitiesSection += line + "\n";
+          } else if (trimmedLine === "ENTITIES") {
+            inEntitiesSection = true;
+          }
+        }
+
+        if (!entitiesSection) {
+          result.errors.push("Sezione ENTITIES non trovata");
+          return result;
+        }
       }
-    } catch (err) {
-      result.errors.push(
-        `Errore nell'estrazione della sezione ENTITIES: ${err.message}`
-      );
-      return result;
-    }
 
-    // Funzione helper per creare una linea
-    const createLine = (points, layer) => {
-      // Materiale per linee più spesse e più scure
-      const material = new THREE.LineBasicMaterial({
-        color: 0x000000, // Nero per planimetrie
-        linewidth: 1.5, // Più spesso per maggiore visibilità (nota: il valore effettivo dipende dal browser)
-      });
+      // Crea un gruppo per tutte le entità
+      const group = new THREE.Group();
+      group.userData = { isDxf: true };
 
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      const line = new THREE.Line(geometry, material);
-      line.userData = { isDxf: true, layer };
-      scene.add(line);
-      result.entitiesCount++;
-      return line;
-    };
+      // Funzione helper per creare una linea
+      const createLine = (points) => {
+        const material = new THREE.LineBasicMaterial({
+          color: 0x333333,
+          linewidth: 1.5,
+        });
 
-    // Analizza le entità
-    try {
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        const line = new THREE.Line(geometry, material);
+        line.userData = { isDxf: true };
+        group.add(line);
+        result.entitiesCount++;
+        return line;
+      };
+
       // LINES - Linee semplici
       parseEntityType(entitiesSection, "LINE", (entityData) => {
         try {
@@ -215,127 +535,22 @@ export function DxfViewer({ data, width = "100%", height = "400px" }) {
           const x2 = getCoord(entityData, 11);
           const y2 = getCoord(entityData, 21);
           const z2 = getCoord(entityData, 31, 0);
-          const layer = getLayerName(entityData);
 
           const points = [
             new THREE.Vector3(x1, y1, z1),
             new THREE.Vector3(x2, y2, z2),
           ];
 
-          createLine(points, layer);
+          createLine(points);
         } catch (err) {
           console.log(`Errore nel parsing di LINE: ${err.message}`);
         }
       });
 
-      // CIRCLES - Cerchi
-      parseEntityType(entitiesSection, "CIRCLE", (entityData) => {
-        try {
-          const x = getCoord(entityData, 10);
-          const y = getCoord(entityData, 20);
-          const z = getCoord(entityData, 30, 0);
-          const radius = getCoord(entityData, 40);
-          const layer = getLayerName(entityData);
-
-          // Più segmenti per cerchi più lisci
-          const segments = Math.max(48, Math.floor(radius * 3));
-          const points = [];
-
-          for (let i = 0; i <= segments; i++) {
-            const theta = (i / segments) * Math.PI * 2;
-            points.push(
-              new THREE.Vector3(
-                x + radius * Math.cos(theta),
-                y + radius * Math.sin(theta),
-                z
-              )
-            );
-          }
-
-          createLine(points, layer);
-        } catch (err) {
-          console.log(`Errore nel parsing di CIRCLE: ${err.message}`);
-        }
-      });
-
-      // ARCS - Archi
-      parseEntityType(entitiesSection, "ARC", (entityData) => {
-        try {
-          const x = getCoord(entityData, 10);
-          const y = getCoord(entityData, 20);
-          const z = getCoord(entityData, 30, 0);
-          const radius = getCoord(entityData, 40);
-          const startAngle = getCoord(entityData, 50) * (Math.PI / 180);
-          const endAngle = getCoord(entityData, 51) * (Math.PI / 180);
-          const layer = getLayerName(entityData);
-
-          // Più segmenti per archi più lisci
-          const segments = Math.max(32, Math.floor(radius * 2));
-          const points = [];
-
-          const angle =
-            endAngle > startAngle
-              ? endAngle - startAngle
-              : Math.PI * 2 + endAngle - startAngle;
-
-          for (let i = 0; i <= segments; i++) {
-            const theta = startAngle + (i / segments) * angle;
-            points.push(
-              new THREE.Vector3(
-                x + radius * Math.cos(theta),
-                y + radius * Math.sin(theta),
-                z
-              )
-            );
-          }
-
-          createLine(points, layer);
-        } catch (err) {
-          console.log(`Errore nel parsing di ARC: ${err.message}`);
-        }
-      });
-
-      // POLYLINES
-      parseEntityType(entitiesSection, "POLYLINE", (entityData) => {
-        try {
-          const layer = getLayerName(entityData);
-          const vertices = [];
-          let currentVertex = entityData.indexOf("VERTEX");
-
-          while (currentVertex !== -1) {
-            const endVertex = entityData.indexOf("VERTEX", currentVertex + 1);
-            const vertexData =
-              endVertex !== -1
-                ? entityData.substring(currentVertex, endVertex)
-                : entityData.substring(currentVertex);
-
-            try {
-              const x = getCoord(vertexData, 10);
-              const y = getCoord(vertexData, 20);
-              const z = getCoord(vertexData, 30, 0);
-              vertices.push(new THREE.Vector3(x, y, z));
-            } catch (err) {
-              // Ignora errori nei vertici
-            }
-
-            currentVertex = endVertex;
-          }
-
-          if (vertices.length >= 2) {
-            createLine(vertices, layer);
-          }
-        } catch (err) {
-          console.log(`Errore nel parsing di POLYLINE: ${err.message}`);
-        }
-      });
-
-      // LWPOLYLINES
+      // LWPOLYLINES e POLYLINES
       parseEntityType(entitiesSection, "LWPOLYLINE", (entityData) => {
         try {
-          const layer = getLayerName(entityData);
           const vertices = [];
-
-          // Trova tutte le coppie di coordinate
           const coordPattern = /10\s+([-\d.]+)[\s\S]*?20\s+([-\d.]+)/g;
           let coordMatch;
 
@@ -346,7 +561,7 @@ export function DxfViewer({ data, width = "100%", height = "400px" }) {
           }
 
           if (vertices.length >= 2) {
-            // Verifica se è chiusa (flag 70 contiene un valore con bit 1 impostato)
+            // Controlla se è chiusa
             const closedMatch = entityData.match(/70\s+(\d+)/);
             const isClosed =
               closedMatch && (parseInt(closedMatch[1]) & 1) !== 0;
@@ -355,35 +570,16 @@ export function DxfViewer({ data, width = "100%", height = "400px" }) {
               vertices.push(vertices[0].clone());
             }
 
-            createLine(vertices, layer);
+            createLine(vertices);
           }
         } catch (err) {
           console.log(`Errore nel parsing di LWPOLYLINE: ${err.message}`);
         }
       });
 
-      // INSERT (blocchi)
-      parseEntityType(entitiesSection, "INSERT", (entityData) => {
-        try {
-          const x = getCoord(entityData, 10, 0);
-          const y = getCoord(entityData, 20, 0);
-          const z = getCoord(entityData, 30, 0);
-          const layer = getLayerName(entityData);
-
-          // Crea un piccolo quadrato per rappresentare l'inserimento
-          const points = [
-            new THREE.Vector3(x - 0.2, y - 0.2, z),
-            new THREE.Vector3(x + 0.2, y - 0.2, z),
-            new THREE.Vector3(x + 0.2, y + 0.2, z),
-            new THREE.Vector3(x - 0.2, y + 0.2, z),
-            new THREE.Vector3(x - 0.2, y - 0.2, z),
-          ];
-
-          createLine(points, layer);
-        } catch (err) {
-          console.log(`Errore nel parsing di INSERT: ${err.message}`);
-        }
-      });
+      if (result.entitiesCount > 0) {
+        scene.add(group);
+      }
     } catch (err) {
       result.errors.push(`Errore generale nel parsing: ${err.message}`);
     }
@@ -399,28 +595,17 @@ export function DxfViewer({ data, width = "100%", height = "400px" }) {
     return parseFloat(match[1]);
   };
 
-  // Funzione helper per estrarre il nome del layer
-  const getLayerName = (entityData) => {
-    const match = entityData.match(/8\s+([^\s]+)/);
-    return match ? match[1] : "0";
-  };
-
   // Funzione helper per analizzare le entità di un tipo specifico
   const parseEntityType = (data, entityType, callback) => {
     let startIdx = data.indexOf(entityType);
 
     while (startIdx !== -1) {
-      // Cerca l'inizio della prossima entità o la fine della sezione
       let endIdx = data.indexOf("\n 0", startIdx + entityType.length);
       if (endIdx === -1) endIdx = data.length;
 
-      // Estrai i dati dell'entità
       const entityData = data.substring(startIdx, endIdx);
-
-      // Processa l'entità
       callback(entityData);
 
-      // Passa alla prossima entità
       startIdx = data.indexOf(entityType, endIdx);
     }
   };
@@ -429,17 +614,22 @@ export function DxfViewer({ data, width = "100%", height = "400px" }) {
   const centerView = () => {
     if (!sceneRef.current || !cameraRef.current || !controlsRef.current) return;
 
-    // Calcola il bounding box di tutte le geometrie
+    // Calcola il bounding box di tutte le geometrie DXF
     const box = new THREE.Box3();
 
-    sceneRef.current.children.forEach((child) => {
-      if (child instanceof THREE.Line && child.userData.isDxf) {
+    sceneRef.current.traverse((child) => {
+      if (child.userData && child.userData.isDxf) {
         box.expandByObject(child);
       }
     });
 
     if (box.isEmpty()) {
       console.warn("Impossibile centrare la vista: nessun oggetto trovato");
+      // Imposta una vista predefinita
+      cameraRef.current.position.set(50, 40, 100);
+      cameraRef.current.lookAt(50, 40, 0);
+      controlsRef.current.target.set(50, 40, 0);
+      controlsRef.current.update();
       return;
     }
 
@@ -449,13 +639,6 @@ export function DxfViewer({ data, width = "100%", height = "400px" }) {
 
     const size = new THREE.Vector3();
     box.getSize(size);
-
-    console.log("Limiti del disegno:", {
-      min: box.min,
-      max: box.max,
-      center,
-      size,
-    });
 
     // Calcola la distanza per vedere tutto il contenuto
     const maxDim = Math.max(size.x, size.y);
@@ -478,22 +661,14 @@ export function DxfViewer({ data, width = "100%", height = "400px" }) {
   // Controlli di zoom
   const zoomIn = () => {
     if (!cameraRef.current) return;
-
     cameraRef.current.position.z *= 0.8;
-
-    if (controlsRef.current) {
-      controlsRef.current.update();
-    }
+    if (controlsRef.current) controlsRef.current.update();
   };
 
   const zoomOut = () => {
     if (!cameraRef.current) return;
-
     cameraRef.current.position.z *= 1.2;
-
-    if (controlsRef.current) {
-      controlsRef.current.update();
-    }
+    if (controlsRef.current) controlsRef.current.update();
   };
 
   const zoomReset = () => {
@@ -509,15 +684,6 @@ export function DxfViewer({ data, width = "100%", height = "400px" }) {
     borderRadius: "4px",
     overflow: "hidden",
   };
-
-  if (error) {
-    return (
-      <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative">
-        <strong className="font-bold">Errore!</strong>
-        <span className="block sm:inline"> {error}</span>
-      </div>
-    );
-  }
 
   return (
     <div style={containerStyle} ref={containerRef}>
@@ -544,12 +710,21 @@ export function DxfViewer({ data, width = "100%", height = "400px" }) {
                 d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
               ></path>
             </svg>
-            Caricamento...
+            Caricamento mappa...
           </div>
         </div>
       )}
 
-      {!data && (
+      {error && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative max-w-md">
+            <strong className="font-bold">Errore!</strong>
+            <span className="block sm:inline"> {error}</span>
+          </div>
+        </div>
+      )}
+
+      {!data && !error && (
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="text-gray-500">
             Carica un file DXF per visualizzare la planimetria
@@ -608,12 +783,19 @@ export function DxfViewer({ data, width = "100%", height = "400px" }) {
           >
             <path
               fillRule="evenodd"
-              d="M3 4a1 1 0 011-1h4a1 1 0 010 2H6.414l2.293 2.293a1 1 0 01-1.414 1.414L5 6.414V8a1 1 0 01-2 0V4zm9 1a1 1 0 010-2h4a1 1 0 011 1v4a1 1 0 01-2 0V6.414l-2.293 2.293a1 1 0 11-1.414-1.414L13.586 5H12zm-9 7a1 1 0 012 0v1.586l2.293-2.293a1 1 0 011.414 1.414L6.414 15H8a1 1 0 010 2H4a1 1 0 01-1-1v-4zm13-1a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 010-2h1.586l-2.293-2.293a1 1 0 011.414-1.414L15 13.586V12a1 1 0 011-1z"
+              d="M10 3a7 7 0 107 7 1 1 0 112 0 9 9 0 11-9-9 1 1 0 010 2zm5.293 5.293a1 1 0 011.414 0l2 2a1 1 0 010 1.414l-2 2a1 1 0 01-1.414-1.414L16.586 11H7a1 1 0 110-2h9.586l-1.293-1.293a1 1 0 010-1.414z"
               clipRule="evenodd"
             />
           </svg>
         </button>
       </div>
+
+      {/* Messaggio di debug per gli ultimi tag rilevati - condizionale in base al parametro showTagsMessage */}
+      {showTagsMessage && Object.keys(tagPositions).length === 0 && (
+        <div className="absolute bottom-14 left-2 bg-white bg-opacity-90 rounded-md shadow-md px-3 py-1 z-20 text-xs text-gray-600">
+          In attesa di tag attivi...
+        </div>
+      )}
     </div>
   );
 }

@@ -6,20 +6,30 @@ const ConnectionStatus = () => {
   const [lastError, setLastError] = useState(null);
   const [expanded, setExpanded] = useState(false);
 
+  // Aggiungi un flag per tenere traccia dei tentativi di riconnessione
+  const [isReconnecting, setIsReconnecting] = useState(false);
+
+  // Usa questo useEffect per gestire la connessione e gli eventi
   useEffect(() => {
     // Funzioni di callback
     const handleOpen = () => {
+      console.log("ConnectionStatus: connessione stabilita");
       setStatus("connected");
       setLastError(null);
+      setIsReconnecting(false);
     };
 
     const handleError = (error) => {
+      console.log("ConnectionStatus: errore di connessione", error);
       setStatus("error");
       setLastError(error.message || "Errore sconosciuto");
+      setIsReconnecting(false);
     };
 
     const handleClose = () => {
+      console.log("ConnectionStatus: connessione chiusa");
       setStatus("disconnected");
+      setIsReconnecting(false);
     };
 
     // Registra i listener
@@ -27,16 +37,37 @@ const ConnectionStatus = () => {
     BlueiotClient.on("error", handleError);
     BlueiotClient.on("close", handleClose);
 
-    // Cleanup - ora usiamo BlueiotClient.off correttamente
+    // Cleanup
     return () => {
-      // Rimuovi i singoli listener per evitare memory leak
       BlueiotClient.off("open", handleOpen);
       BlueiotClient.off("error", handleError);
       BlueiotClient.off("close", handleClose);
     };
   }, []);
 
+  // Funzione per tentare la riconnessione
+  const handleReconnect = () => {
+    console.log("Tentativo di riconnessione a BlueIOT...");
+    setIsReconnecting(true);
+
+    // Assicurati di disconnetterti prima di riconnetterti
+    BlueiotClient.disconnect();
+
+    // Aggiungi un piccolo ritardo per garantire che la disconnessione sia completata
+    setTimeout(() => {
+      BlueiotClient.connect();
+    }, 500);
+  };
+
+  // Funzione per disconnettersi
+  const handleDisconnect = () => {
+    console.log("Disconnessione da BlueIOT...");
+    BlueiotClient.disconnect();
+  };
+
   const getStatusColor = () => {
+    if (isReconnecting) return "bg-yellow-500"; // Giallo durante la riconnessione
+
     switch (status) {
       case "connected":
         return "bg-green-500";
@@ -50,6 +81,8 @@ const ConnectionStatus = () => {
   };
 
   const getStatusText = () => {
+    if (isReconnecting) return "Riconnessione in corso...";
+
     switch (status) {
       case "connected":
         return "Connesso a BlueIOT";
@@ -83,20 +116,28 @@ const ConnectionStatus = () => {
         {expanded && (
           <div className="mt-2 grid grid-cols-2 gap-2">
             <button
-              className="bg-white text-gray-800 px-2 py-1 rounded text-sm"
+              className={`bg-white text-gray-800 px-2 py-1 rounded text-sm ${
+                status === "disconnected" ? "opacity-50 cursor-not-allowed" : ""
+              }`}
               onClick={(e) => {
                 e.stopPropagation();
-                BlueiotClient.disconnect();
+                handleDisconnect();
               }}
+              disabled={status === "disconnected"}
             >
               Disconnetti
             </button>
             <button
-              className="bg-white text-gray-800 px-2 py-1 rounded text-sm"
+              className={`bg-white text-gray-800 px-2 py-1 rounded text-sm ${
+                status === "connected" || isReconnecting
+                  ? "opacity-50 cursor-not-allowed"
+                  : ""
+              }`}
               onClick={(e) => {
                 e.stopPropagation();
-                BlueiotClient.connect();
+                handleReconnect();
               }}
+              disabled={status === "connected" || isReconnecting}
             >
               Riconnetti
             </button>
